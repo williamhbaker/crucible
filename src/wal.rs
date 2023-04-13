@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{BufWriter, Write},
+    io::{BufReader, BufWriter, Read, Write},
     path,
 };
 
@@ -29,6 +29,7 @@ impl Operation {
 
 pub struct Wal {
     file: fs::File,
+    path: path::PathBuf,
 }
 
 impl Wal {
@@ -39,7 +40,10 @@ impl Wal {
             .open(path)
             .unwrap();
 
-        Wal { file }
+        Wal {
+            file,
+            path: path.into(),
+        }
     }
 
     pub fn append(&mut self, op: &Operation, key: &[u8], val: &[u8]) {
@@ -59,56 +63,66 @@ impl Wal {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::io::{BufReader, Read};
+pub struct IntoIter {
+    r: BufReader<fs::File>,
+}
 
-    use super::*;
-    use tempdir::TempDir;
+impl Wal {
+    pub fn into_iter(self) -> IntoIter {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .create(false)
+            .open(self.path)
+            .unwrap();
 
-    // TODO: This will probably be moved elsewhere soon, but is implemented here to allow for testing.
-    fn read_wal(path: &path::Path) -> Vec<WalRecord> {
-        let wal_file = fs::OpenOptions::new().read(true).open(path).unwrap();
-        let mut r = BufReader::new(&wal_file);
+        let r = BufReader::new(file);
 
-        let mut out = Vec::new();
+        IntoIter { r }
+    }
+}
+
+impl Iterator for IntoIter {
+    type Item = WalRecord;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut rec = WalRecord::default();
 
         // Big enough for operation, key length, and val length
         // 1 byte + 4 bytes + 4 bytes
         let mut buf = [0; 9];
 
-        loop {
-            let mut rec = WalRecord::default();
-
-            // We might be at the end of the file, or it has a length of 0, or it has an incomplete
-            // header portion.
-            match r.read(&mut buf) {
-                Ok(9) => (),
-                Ok(0) => break,
-                Ok(n) => panic!("bad header in record, had {} bytes", n),
-                Err(e) => panic!("could not read wal record hreader: {}", e),
-            }
-
-            match buf[0] {
-                b'0' => rec.op = Operation::Put,
-                b'1' => rec.op = Operation::Delete,
-                b => panic!("invalid op byte {}", b),
-            }
-
-            let key_length = u32::from_le_bytes(buf[1..5].try_into().unwrap());
-            let val_length = u32::from_le_bytes(buf[5..9].try_into().unwrap());
-
-            rec.key = vec![0; key_length as usize];
-            r.read_exact(&mut rec.key).unwrap();
-
-            rec.val = vec![0; val_length as usize];
-            r.read_exact(&mut rec.val).unwrap();
-
-            out.push(rec);
+        // We might be at the end of the file, or it has a length of 0, or it has an incomplete
+        // header portion.
+        match self.r.read(&mut buf) {
+            Ok(9) => (),
+            Ok(0) => return None,
+            Ok(n) => panic!("bad header in record, had {} bytes", n),
+            Err(e) => panic!("could not read wal record hreader: {}", e),
         }
 
-        out
+        match buf[0] {
+            b'0' => rec.op = Operation::Put,
+            b'1' => rec.op = Operation::Delete,
+            b => panic!("invalid op byte {}", b),
+        }
+
+        let key_length = u32::from_le_bytes(buf[1..5].try_into().unwrap());
+        let val_length = u32::from_le_bytes(buf[5..9].try_into().unwrap());
+
+        rec.key = vec![0; key_length as usize];
+        self.r.read_exact(&mut rec.key).unwrap();
+
+        rec.val = vec![0; val_length as usize];
+        self.r.read_exact(&mut rec.val).unwrap();
+
+        Some(rec)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempdir::TempDir;
 
     #[test]
     fn test_writes() {
@@ -141,9 +155,7 @@ mod tests {
             wal.append(&r.op, &r.key, &r.val)
         }
 
-        let got = read_wal(&file_path);
-
-        got.iter().zip(records.iter()).for_each(|(got, want)| {
+        wal.into_iter().zip(records.iter()).for_each(|(got, want)| {
             assert_eq!(got.op, want.op);
             assert_eq!(got.key, want.key);
             assert_eq!(got.val, want.val);
