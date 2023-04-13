@@ -17,7 +17,7 @@ impl MemTable {
         self.data.insert(key, val);
     }
 
-    pub fn get(&mut self, key: Vec<u8>) -> Option<&Vec<u8>> {
+    pub fn get(&self, key: Vec<u8>) -> Option<&Vec<u8>> {
         self.data.get(&key)
     }
 
