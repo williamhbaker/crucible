@@ -11,7 +11,7 @@ pub struct WalRecord {
     pub val: Vec<u8>,
 }
 
-#[derive(Default, PartialEq, Debug)]
+#[derive(Default, PartialEq, Debug, Clone)]
 pub enum Operation {
     #[default]
     Put,
@@ -46,7 +46,7 @@ impl Wal {
         }
     }
 
-    pub fn append(&mut self, op: &Operation, key: &[u8], val: &[u8]) {
+    pub fn append(&mut self, op: Operation, key: &[u8], val: &[u8]) {
         let mut w = BufWriter::new(&self.file); // TODO: Re-use?
 
         let key_length = key.len() as u32;
@@ -152,7 +152,7 @@ mod tests {
         ];
 
         for r in &records {
-            wal.append(&r.op, &r.key, &r.val)
+            wal.append(r.op.clone(), &r.key, &r.val)
         }
 
         wal.into_iter().zip(records.iter()).for_each(|(got, want)| {

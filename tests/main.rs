@@ -42,15 +42,18 @@ fn memtabel_recovery_from_wal() {
     ];
 
     for r in &records {
-        wal.append(&r.op, &r.key, &r.val)
+        wal.append(r.op.clone(), &r.key, &r.val)
     }
 
     let mt: MemTable = wal.into();
 
-    assert_eq!(None, mt.get(b"key1".to_vec()));
+    assert_eq!(None, mt.get(b"key1".to_vec().as_ref()));
     assert_eq!(
         Some(b"val2updated".to_vec().as_ref()),
-        mt.get(b"key2".to_vec())
+        mt.get(b"key2".to_vec().as_ref())
     );
-    assert_eq!(Some(b"val3".to_vec().as_ref()), mt.get(b"key3".to_vec()));
+    assert_eq!(
+        Some(b"val3".to_vec().as_ref()),
+        mt.get(b"key3".to_vec().as_ref())
+    );
 }
