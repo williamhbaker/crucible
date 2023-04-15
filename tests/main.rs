@@ -1,17 +1,13 @@
 use crucible::{
-    memtable::MemTable,
-    wal::{Operation, Wal, WalRecord},
+    wal::{Operation, WalRecord},
+    Store,
 };
 use tempdir::TempDir;
 
 #[test]
-fn memtabel_recovery_from_wal() {
+fn test_store() {
     let dir = TempDir::new("testing").unwrap();
-    let file = "data.wal";
-    let dir_path = dir.path();
-    let file_path = dir_path.join(&file);
-
-    let mut wal = Wal::new(&file_path);
+    let mut store = Store::new(dir.path());
 
     let records = vec![
         WalRecord {
@@ -41,19 +37,45 @@ fn memtabel_recovery_from_wal() {
         },
     ];
 
-    for r in &records {
-        wal.append(r.op.clone(), &r.key, &r.val)
+    for rec in records {
+        match rec.op {
+            Operation::Put => store.put(&rec.key, &rec.val),
+            Operation::Delete => store.del(&rec.key),
+        }
     }
 
-    let mt: MemTable = wal.into();
-
-    assert_eq!(None, mt.get(b"key1".to_vec().as_ref()));
+    assert_eq!(None, store.get(b"key1".to_vec().as_ref()));
     assert_eq!(
         Some(b"val2updated".to_vec().as_ref()),
-        mt.get(b"key2".to_vec().as_ref())
+        store.get(b"key2".to_vec().as_ref())
     );
     assert_eq!(
         Some(b"val3".to_vec().as_ref()),
-        mt.get(b"key3".to_vec().as_ref())
+        store.get(b"key3".to_vec().as_ref())
+    );
+
+    // Re-open and the results are the same.
+    drop(store);
+    let mut store = Store::new(dir.path());
+    assert_eq!(None, store.get(b"key1".to_vec().as_ref()));
+    assert_eq!(
+        Some(b"val2updated".to_vec().as_ref()),
+        store.get(b"key2".to_vec().as_ref())
+    );
+    assert_eq!(
+        Some(b"val3".to_vec().as_ref()),
+        store.get(b"key3".to_vec().as_ref())
+    );
+
+    // Modify the opened store then re-open it.
+    store.del(b"key2".as_ref());
+
+    drop(store);
+    let store = Store::new(dir.path());
+    assert_eq!(None, store.get(b"key1".to_vec().as_ref()));
+    assert_eq!(None, store.get(b"key2".to_vec().as_ref()));
+    assert_eq!(
+        Some(b"val3".to_vec().as_ref()),
+        store.get(b"key3".to_vec().as_ref())
     );
 }

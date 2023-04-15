@@ -37,6 +37,7 @@ impl Store {
     }
 
     pub fn del(&mut self, key: &[u8]) {
+        self.wal.append(wal::Operation::Delete, &key, &[]);
         self.memtable.del(key)
     }
 }
