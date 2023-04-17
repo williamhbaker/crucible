@@ -28,7 +28,7 @@ impl Store {
     }
 
     pub fn put(&mut self, key: &[u8], val: &[u8]) {
-        self.wal.append(wal::Operation::Put, &key, &val);
+        self.wal.append(wal::Operation::Put, &key, Some(&val));
         self.memtable.put(key, val);
     }
 
@@ -37,7 +37,7 @@ impl Store {
     }
 
     pub fn del(&mut self, key: &[u8]) {
-        self.wal.append(wal::Operation::Delete, &key, &[]);
+        self.wal.append(wal::Operation::Delete, &key, None);
         self.memtable.del(key)
     }
 }

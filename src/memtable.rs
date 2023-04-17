@@ -33,7 +33,7 @@ impl From<wal::Wal> for MemTable {
         let mut out = MemTable::new();
 
         wal.into_iter().for_each(|rec| match rec.op {
-            wal::Operation::Put => out.put(&rec.key, &rec.val),
+            wal::Operation::Put => out.put(&rec.key, &rec.val.unwrap()),
             wal::Operation::Delete => out.del(&rec.key),
         });
 

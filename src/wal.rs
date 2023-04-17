@@ -8,7 +8,7 @@ use std::{
 pub struct WalRecord {
     pub op: Operation,
     pub key: Vec<u8>,
-    pub val: Vec<u8>,
+    pub val: Option<Vec<u8>>,
 }
 
 #[derive(Default, PartialEq, Debug, Clone)]
@@ -46,17 +46,21 @@ impl Wal {
         }
     }
 
-    pub fn append(&mut self, op: Operation, key: &[u8], val: &[u8]) {
+    pub fn append(&mut self, op: Operation, key: &[u8], val: Option<&[u8]>) {
         let mut w = BufWriter::new(&self.file); // TODO: Re-use?
 
         let key_length = key.len() as u32;
-        let val_length = val.len() as u32;
+        let val_length = if let Some(val) = val { val.len() } else { 0 } as u32;
 
         w.write(&op.as_bytes()).unwrap();
         w.write(&key_length.to_le_bytes()).unwrap();
         w.write(&val_length.to_le_bytes()).unwrap();
+
         w.write(&key).unwrap();
-        w.write(&val).unwrap();
+        if let Some(val) = val {
+            w.write(&val).unwrap();
+        }
+
         w.flush().unwrap();
 
         self.file.sync_all().unwrap();
@@ -107,13 +111,16 @@ impl Iterator for IntoIter {
         }
 
         let key_length = u32::from_le_bytes(buf[1..5].try_into().unwrap());
-        let val_length = u32::from_le_bytes(buf[5..9].try_into().unwrap());
 
         rec.key = vec![0; key_length as usize];
         self.r.read_exact(&mut rec.key).unwrap();
 
-        rec.val = vec![0; val_length as usize];
-        self.r.read_exact(&mut rec.val).unwrap();
+        if rec.op == Operation::Put {
+            let val_length = u32::from_le_bytes(buf[5..9].try_into().unwrap());
+            let mut v = vec![0; val_length as usize];
+            self.r.read_exact(&mut v).unwrap();
+            rec.val = Some(v)
+        }
 
         Some(rec)
     }

@@ -13,33 +13,33 @@ fn test_store() {
         WalRecord {
             op: Operation::Put,
             key: b"key1".to_vec(),
-            val: b"val1".to_vec(),
+            val: Some(b"val1".to_vec()),
         },
         WalRecord {
             op: Operation::Put,
             key: b"key2".to_vec(),
-            val: b"val2".to_vec(),
+            val: Some(b"val2".to_vec()),
         },
         WalRecord {
             op: Operation::Delete,
             key: b"key1".to_vec(),
-            val: b"val1".to_vec(),
+            val: None,
         },
         WalRecord {
             op: Operation::Put,
             key: b"key2".to_vec(),
-            val: b"val2updated".to_vec(),
+            val: Some(b"val2updated".to_vec()),
         },
         WalRecord {
             op: Operation::Put,
             key: b"key3".to_vec(),
-            val: b"val3".to_vec(),
+            val: Some(b"val3".to_vec()),
         },
     ];
 
     for rec in records {
         match rec.op {
-            Operation::Put => store.put(&rec.key, &rec.val),
+            Operation::Put => store.put(&rec.key, &rec.val.unwrap()),
             Operation::Delete => store.del(&rec.key),
         }
     }
