@@ -3,6 +3,8 @@ use std::path;
 use crate::{memtable::MemTable, wal::Wal};
 
 pub mod memtable;
+pub mod protocol;
+pub mod sst;
 pub mod wal;
 
 const WAL_FILE_NAME: &'static str = "data.wal";

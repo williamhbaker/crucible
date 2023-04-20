@@ -33,6 +33,10 @@ impl MemTable {
     pub fn del(&mut self, key: &[u8]) {
         self.data.insert(key.to_vec(), None);
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Vec<u8>, &Option<Vec<u8>>)> {
+        self.data.iter()
+    }
 }
 
 impl From<wal::Wal> for MemTable {
