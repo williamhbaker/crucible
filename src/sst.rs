@@ -106,7 +106,7 @@ pub struct IndexEntry {
 
 pub fn write_records<'a, T: Iterator<Item = WriteRecord<'a>>>(path: &path::Path, records: T) {
     let mut sorted_records: Vec<WriteRecord> = records.collect();
-    sorted_records.sort_unstable_by_key(|v| v.key());
+    sorted_records.sort_unstable_by_key(|v| v.key().to_vec());
 
     let file = fs::OpenOptions::new()
         .append(true)
@@ -116,17 +116,17 @@ pub fn write_records<'a, T: Iterator<Item = WriteRecord<'a>>>(path: &path::Path,
 
     let mut w = BufWriter::new(&file);
 
-    let mut index_offsets: HashMap<Vec<u8>, u32> = HashMap::new();
+    let mut index_offsets: HashMap<&[u8], u32> = HashMap::new();
 
     let index_start = sorted_records.iter().fold(0, |written, record| {
         index_offsets.insert(record.key(), written);
         written + record.write_to(&mut w)
     });
 
-    for record in sorted_records {
-        let key = record.key_ref();
+    for record in &sorted_records {
+        let key = record.key();
 
-        let offset = index_offsets.get(record.key_ref()).unwrap();
+        let offset = index_offsets.get(record.key()).unwrap();
         w.write(&offset.to_le_bytes()).unwrap();
 
         w.write(&(key.len() as u32).to_le_bytes()).unwrap();
