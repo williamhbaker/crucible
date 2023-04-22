@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::protocol::ReadRecord;
+use crate::protocol::{ReadRecord, WriteRecord};
 
 pub struct MemTable {
     // An entry that is present in the HashMap with a value of None represents a specific deletion
@@ -35,8 +35,11 @@ impl MemTable {
         self.data.insert(key.to_vec(), None);
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&Vec<u8>, &Option<Vec<u8>>)> {
-        self.data.iter()
+    pub fn iter(&self) -> impl Iterator<Item = WriteRecord> {
+        self.data.iter().map(|(key, val)| match val {
+            Some(val) => WriteRecord::Exists { key, val },
+            None => WriteRecord::Deleted { key },
+        })
     }
 }
 

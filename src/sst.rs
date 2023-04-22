@@ -5,10 +5,7 @@ use std::{
     path,
 };
 
-use crate::{
-    memtable,
-    protocol::{ReadRecord, WriteRecord},
-};
+use crate::protocol::{ReadRecord, WriteRecord};
 
 pub struct SST {
     index: Index,
@@ -107,11 +104,9 @@ pub struct IndexEntry {
     offset: u32,
 }
 
-pub fn write_memtable(path: &path::Path, memtable: &memtable::MemTable) {
-    let mut data: Vec<(&Vec<u8>, &Option<Vec<u8>>)> = memtable.iter().collect();
-    data.sort_by(|a, b| a.0.cmp(b.0));
-
-    let mut index_offsets: HashMap<&[u8], u32> = HashMap::new();
+pub fn write_records<'a, T: Iterator<Item = WriteRecord<'a>>>(path: &path::Path, records: T) {
+    let mut sorted_records: Vec<WriteRecord> = records.collect();
+    sorted_records.sort_unstable_by_key(|v| v.key());
 
     let file = fs::OpenOptions::new()
         .append(true)
@@ -121,31 +116,22 @@ pub fn write_memtable(path: &path::Path, memtable: &memtable::MemTable) {
 
     let mut w = BufWriter::new(&file);
 
-    let mut written = 0;
+    let mut index_offsets: HashMap<Vec<u8>, u32> = HashMap::new();
 
-    data.iter().for_each(|(key, val)| {
-        index_offsets.insert(key, written);
-
-        let rec = match val {
-            Some(v) => WriteRecord::Exists { key, val: v },
-            None => WriteRecord::Deleted { key },
-        };
-
-        written += rec.write_to(&mut w);
+    let index_start = sorted_records.iter().fold(0, |written, record| {
+        index_offsets.insert(record.key(), written);
+        written + record.write_to(&mut w)
     });
 
-    let index_start = written;
+    for record in sorted_records {
+        let key = record.key_ref();
 
-    // Index records are stored as:
-    //  record offset: u32 | key length: u32 | key bytes
-    data.iter().for_each(|(k, _)| {
-        let offset = index_offsets.get(k.as_slice()).unwrap();
+        let offset = index_offsets.get(record.key_ref()).unwrap();
         w.write(&offset.to_le_bytes()).unwrap();
 
-        let key_length = k.len() as u32;
-        w.write(&key_length.to_le_bytes()).unwrap();
-        w.write(k).unwrap();
-    });
+        w.write(&(key.len() as u32).to_le_bytes()).unwrap();
+        w.write(key).unwrap();
+    }
 
     // The final byte is the file offset where the index begins.
     w.write(&index_start.to_le_bytes()).unwrap();
@@ -180,7 +166,7 @@ mod tests {
         let dir = TempDir::new("testing").unwrap();
         let path = dir.path().join("data.sst");
 
-        write_memtable(&path, &memtable);
+        write_records(&path, memtable.iter());
 
         let mut sst = SST::new(&path);
 

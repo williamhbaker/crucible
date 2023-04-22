@@ -31,6 +31,20 @@ impl<'a> WriteRecord<'a> {
 
         written as u32
     }
+
+    pub fn key(&self) -> Vec<u8> {
+        match self {
+            WriteRecord::Exists { key, .. } => key.to_vec(),
+            WriteRecord::Deleted { key } => key.to_vec(),
+        }
+    }
+
+    pub fn key_ref(&self) -> &[u8] {
+        match self {
+            WriteRecord::Exists { key, .. } => key,
+            WriteRecord::Deleted { key } => key,
+        }
+    }
 }
 
 #[derive(PartialEq, Debug)]

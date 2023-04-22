@@ -24,12 +24,10 @@ impl Store {
 
         // TODO: Convert any existing wal file into an SST. Then initialize a new wal for this
         // invocation.
+        let wal = wal::Writer::new(&wal_file_path);
         let memtable = wal::Reader::new(&wal_file_path).into_iter().collect();
 
-        Store {
-            memtable,
-            wal: wal::Writer::new(&wal_file_path),
-        }
+        Store { memtable, wal }
     }
 
     pub fn put(&mut self, key: &[u8], val: &[u8]) {
