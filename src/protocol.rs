@@ -9,7 +9,7 @@ pub enum WriteRecord<'a> {
 }
 
 impl<'a> WriteRecord<'a> {
-    pub fn write<T: Write>(&self, w: &mut T) -> u32 {
+    pub fn write_to<T: Write>(&self, w: &mut T) -> u32 {
         let mut written = 0;
 
         let (op_byte, key, val) = match self {

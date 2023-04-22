@@ -11,74 +11,101 @@ use crate::{
 };
 
 pub struct SST {
-    index: HashMap<Vec<u8>, u32>, // Keys (as byte slices) to file offsets
+    index: Index,
     file: fs::File,
+}
+
+struct Index(HashMap<Vec<u8>, u32>); // Keys (as byte slices) to file offsets
+
+impl Index {
+    fn get_offset(&self, key: &[u8]) -> Option<&u32> {
+        self.0.get(key)
+    }
+}
+
+impl FromIterator<IndexEntry> for Index {
+    fn from_iter<I: IntoIterator<Item = IndexEntry>>(iter: I) -> Self {
+        let mut map = HashMap::new();
+
+        for i in iter {
+            map.insert(i.key, i.offset);
+        }
+
+        Index(map)
+    }
 }
 
 impl SST {
     pub fn new(path: &path::Path) -> Self {
-        let mut file = fs::OpenOptions::new().read(true).open(path).unwrap();
-
-        file.seek(SeekFrom::End(-4)).unwrap();
-
-        // 4 bytes for the starting offset of the index in the file.
-        let mut buf = [0; 4];
-        file.read_exact(&mut buf).unwrap();
-
-        let index_start = u32::from_le_bytes(buf[0..4].try_into().unwrap());
-
+        let file = fs::OpenOptions::new().read(true).open(path).unwrap();
         let mut r = BufReader::new(&file);
-
-        r.seek(SeekFrom::Start(index_start as u64)).unwrap();
-
-        let mut index = HashMap::new();
-        let mut entry = IndexEntry::default();
-        while entry.read_from(&mut r) {
-            index.insert(entry.key, entry.offset);
-            entry = IndexEntry::default();
-        }
+        let index = IndexReader(&mut r).into_iter().collect();
 
         SST { index, file }
     }
 
     pub fn get(&self, key: &[u8]) -> Option<ReadRecord> {
-        match self.index.get(key) {
+        match self.index.get_offset(key) {
             Some(offset) => {
                 let mut reader = BufReader::new(&self.file); // TODO: Re-use?
                 reader.seek(SeekFrom::Start(*offset as u64)).unwrap();
-                ReadRecord::read_from(&mut reader)
+                // There should always be a record here since we found it in the index.
+                Some(ReadRecord::read_from(&mut reader).unwrap())
             }
             None => None,
         }
     }
 }
 
-#[derive(Default)]
-pub struct IndexEntry {
-    key: Vec<u8>,
-    offset: u32,
+struct IndexReader<T: Read + Seek>(T);
+
+impl<T: Read + Seek> IntoIterator for IndexReader<T> {
+    type Item = IndexEntry;
+    type IntoIter = IndexIter<T>;
+
+    fn into_iter(mut self) -> Self::IntoIter {
+        self.0.seek(SeekFrom::End(-4)).unwrap();
+
+        // 4 bytes for the starting offset of the index in the file.
+        let mut buf = [0; 4];
+        self.0.read_exact(&mut buf).unwrap();
+
+        let index_start = u32::from_le_bytes(buf[0..4].try_into().unwrap());
+
+        self.0.seek(SeekFrom::Start(index_start as u64)).unwrap();
+
+        IndexIter(self.0)
+    }
 }
 
-impl IndexEntry {
-    fn read_from<R: Read>(&mut self, reader: &mut R) -> bool {
+struct IndexIter<T: Read>(T);
+
+impl<T: Read> Iterator for IndexIter<T> {
+    type Item = IndexEntry;
+
+    fn next(&mut self) -> Option<Self::Item> {
         // Read record offset & key length. 4 bytes each.
         let mut buf = [0; 8];
-        match reader.read(&mut buf) {
+        match self.0.read(&mut buf) {
             Ok(8) => (),
-            Ok(4) => return false, // EOF since the footer is 4 bytes
+            Ok(4) => return None, // EOF since the footer is 4 bytes
             Ok(n) => panic!("bad header in index record, had {} bytes", n),
             Err(e) => panic!("could not read index record header: {}", e),
         }
 
-        self.offset = u32::from_le_bytes(buf[0..4].try_into().unwrap());
-
+        let offset = u32::from_le_bytes(buf[0..4].try_into().unwrap());
         let key_length = u32::from_le_bytes(buf[4..8].try_into().unwrap());
 
-        self.key = vec![0; key_length as usize];
-        reader.read_exact(&mut self.key).unwrap();
+        let mut key = vec![0; key_length as usize];
+        self.0.read_exact(&mut key).unwrap();
 
-        true
+        Some(IndexEntry { key, offset })
     }
+}
+
+pub struct IndexEntry {
+    key: Vec<u8>,
+    offset: u32,
 }
 
 pub fn write_memtable(path: &path::Path, memtable: &memtable::MemTable) {
@@ -105,7 +132,7 @@ pub fn write_memtable(path: &path::Path, memtable: &memtable::MemTable) {
             None => WriteRecord::Deleted { key: k },
         };
 
-        written += rec.write(&mut w);
+        written += rec.write_to(&mut w);
     });
 
     let index_start = written;
@@ -164,6 +191,21 @@ mod tests {
                 val: b"val1".to_vec()
             }),
             sst.get(&b"key1".to_vec())
+        );
+
+        assert_eq!(
+            Some(ReadRecord::Exists {
+                key: b"key3".to_vec(),
+                val: b"val3".to_vec()
+            }),
+            sst.get(&b"key3".to_vec())
+        );
+
+        assert_eq!(
+            Some(ReadRecord::Deleted {
+                key: b"key2".to_vec(),
+            }),
+            sst.get(&b"key2".to_vec())
         );
     }
 }
