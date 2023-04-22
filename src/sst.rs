@@ -12,7 +12,7 @@ use crate::{
 
 pub struct SST {
     index: Index,
-    file: fs::File,
+    r: BufReader<fs::File>,
 }
 
 struct Index(HashMap<Vec<u8>, u32>); // Keys (as byte slices) to file offsets
@@ -38,19 +38,18 @@ impl FromIterator<IndexEntry> for Index {
 impl SST {
     pub fn new(path: &path::Path) -> Self {
         let file = fs::OpenOptions::new().read(true).open(path).unwrap();
-        let mut r = BufReader::new(&file);
+        let mut r = BufReader::new(file);
         let index = IndexReader(&mut r).into_iter().collect();
 
-        SST { index, file }
+        SST { index, r }
     }
 
-    pub fn get(&self, key: &[u8]) -> Option<ReadRecord> {
+    pub fn get(&mut self, key: &[u8]) -> Option<ReadRecord> {
         match self.index.get_offset(key) {
             Some(offset) => {
-                let mut reader = BufReader::new(&self.file); // TODO: Re-use?
-                reader.seek(SeekFrom::Start(*offset as u64)).unwrap();
+                self.r.seek(SeekFrom::Start(*offset as u64)).unwrap();
                 // There should always be a record here since we found it in the index.
-                Some(ReadRecord::read_from(&mut reader).unwrap())
+                Some(ReadRecord::read_from(&mut self.r).unwrap())
             }
             None => None,
         }
@@ -183,7 +182,7 @@ mod tests {
 
         write_memtable(&path, &memtable);
 
-        let sst = SST::new(&path);
+        let mut sst = SST::new(&path);
 
         assert_eq!(
             Some(ReadRecord::Exists {
