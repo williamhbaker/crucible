@@ -25,13 +25,8 @@ impl Wal {
         }
     }
 
-    pub fn append(&mut self, key: &[u8], val: Option<&[u8]>) {
+    pub fn append(&mut self, rec: WriteRecord) {
         let mut w = BufWriter::new(&self.file); // TODO: Re-use?
-
-        let rec = match val {
-            Some(val) => WriteRecord::Exists { key, val },
-            None => WriteRecord::Deleted { key },
-        };
 
         rec.write_to(&mut w);
         w.flush().unwrap();

@@ -1,5 +1,7 @@
 use std::path;
 
+use protocol::WriteRecord;
+
 use crate::{memtable::MemTable, wal::Wal};
 
 pub mod memtable;
@@ -32,7 +34,7 @@ impl Store {
     }
 
     pub fn put(&mut self, key: &[u8], val: &[u8]) {
-        self.wal.append(&key, Some(&val));
+        self.wal.append(WriteRecord::Exists { key, val });
         self.memtable.put(key, val);
     }
 
@@ -41,7 +43,7 @@ impl Store {
     }
 
     pub fn del(&mut self, key: &[u8]) {
-        self.wal.append(&key, None);
+        self.wal.append(WriteRecord::Deleted { key });
         self.memtable.del(key)
     }
 }
