@@ -6,52 +6,46 @@ use std::{
 
 use crate::protocol::{ReadRecord, WriteRecord};
 
-pub struct Wal {
-    file: fs::File,
-    path: path::PathBuf,
+pub struct Writer {
+    w: BufWriter<fs::File>,
 }
 
-impl Wal {
+impl Writer {
     pub fn new(path: &path::Path) -> Self {
-        let file = fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(path)
-            .unwrap();
-
-        Wal {
-            file,
-            path: path.into(),
+        Writer {
+            w: BufWriter::new(
+                fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(path)
+                    .unwrap(),
+            ),
         }
     }
 
     pub fn append(&mut self, rec: WriteRecord) {
-        let mut w = BufWriter::new(&self.file); // TODO: Re-use?
-
-        rec.write_to(&mut w);
-        w.flush().unwrap();
-        self.file.sync_all().unwrap();
+        rec.write_to(&mut self.w);
+        self.w.flush().unwrap();
+        // TODO: Compare to sync_data().
+        self.w.get_ref().sync_all().unwrap();
     }
 }
 
-impl IntoIterator for Wal {
-    type Item = ReadRecord;
-    type IntoIter = Iter;
+pub struct Reader(BufReader<fs::File>);
 
-    fn into_iter(self) -> Self::IntoIter {
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .create(false)
-            .open(self.path)
-            .unwrap();
-
-        Iter(BufReader::new(file))
+impl Reader {
+    pub fn new(path: &path::Path) -> Self {
+        Reader(BufReader::new(
+            fs::OpenOptions::new()
+                .read(true)
+                .create(false)
+                .open(path)
+                .unwrap(),
+        ))
     }
 }
 
-pub struct Iter(BufReader<fs::File>);
-
-impl Iterator for Iter {
+impl Iterator for Reader {
     type Item = ReadRecord;
 
     fn next(&mut self) -> Option<Self::Item> {

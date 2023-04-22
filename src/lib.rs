@@ -2,7 +2,7 @@ use std::path;
 
 use protocol::WriteRecord;
 
-use crate::{memtable::MemTable, wal::Wal};
+use crate::memtable::MemTable;
 
 pub mod memtable;
 pub mod protocol;
@@ -13,7 +13,7 @@ const WAL_FILE_NAME: &'static str = "data.wal";
 
 pub struct Store {
     memtable: MemTable,
-    wal: Wal,
+    wal: wal::Writer,
 }
 
 impl Store {
@@ -21,15 +21,14 @@ impl Store {
         // Read existing wal records into the initial memtable. For now we are leaving the wal alone
         // and always re-reading and only ever appending to it.
         let wal_file_path = data_dir.join(&WAL_FILE_NAME);
-        let wal = Wal::new(&wal_file_path);
 
         // TODO: Convert any existing wal file into an SST. Then initialize a new wal for this
         // invocation.
-        let memtable = wal.into_iter().collect();
+        let memtable = wal::Reader::new(&wal_file_path).into_iter().collect();
 
         Store {
             memtable,
-            wal: Wal::new(&wal_file_path),
+            wal: wal::Writer::new(&wal_file_path),
         }
     }
 
