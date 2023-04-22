@@ -21,7 +21,9 @@ impl Store {
         let wal_file_path = data_dir.join(&WAL_FILE_NAME);
         let wal = Wal::new(&wal_file_path);
 
-        let memtable = wal.into();
+        // TODO: Convert any existing wal file into an SST. Then initialize a new wal for this
+        // invocation.
+        let memtable = wal.into_iter().collect();
 
         Store {
             memtable,
@@ -30,7 +32,7 @@ impl Store {
     }
 
     pub fn put(&mut self, key: &[u8], val: &[u8]) {
-        self.wal.append(wal::Operation::Put, &key, Some(&val));
+        self.wal.append(&key, Some(&val));
         self.memtable.put(key, val);
     }
 
@@ -39,7 +41,7 @@ impl Store {
     }
 
     pub fn del(&mut self, key: &[u8]) {
-        self.wal.append(wal::Operation::Delete, &key, None);
+        self.wal.append(&key, None);
         self.memtable.del(key)
     }
 }

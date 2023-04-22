@@ -33,7 +33,6 @@ impl<'a> WriteRecord<'a> {
     }
 }
 
-// TODO: Unify with WAL
 #[derive(PartialEq, Debug)]
 pub enum ReadRecord {
     Exists { key: Vec<u8>, val: Vec<u8> },

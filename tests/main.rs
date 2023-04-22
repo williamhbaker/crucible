@@ -1,7 +1,4 @@
-use crucible::{
-    wal::{Operation, WalRecord},
-    Store,
-};
+use crucible::{protocol::ReadRecord, Store};
 use tempdir::TempDir;
 
 #[test]
@@ -10,37 +7,31 @@ fn test_store() {
     let mut store = Store::new(dir.path());
 
     let records = vec![
-        WalRecord {
-            op: Operation::Put,
+        ReadRecord::Exists {
             key: b"key1".to_vec(),
-            val: Some(b"val1".to_vec()),
+            val: b"val1".to_vec(),
         },
-        WalRecord {
-            op: Operation::Put,
+        ReadRecord::Exists {
             key: b"key2".to_vec(),
-            val: Some(b"val2".to_vec()),
+            val: b"val2".to_vec(),
         },
-        WalRecord {
-            op: Operation::Delete,
+        ReadRecord::Deleted {
             key: b"key1".to_vec(),
-            val: None,
         },
-        WalRecord {
-            op: Operation::Put,
+        ReadRecord::Exists {
             key: b"key2".to_vec(),
-            val: Some(b"val2updated".to_vec()),
+            val: b"val2updated".to_vec(),
         },
-        WalRecord {
-            op: Operation::Put,
+        ReadRecord::Exists {
             key: b"key3".to_vec(),
-            val: Some(b"val3".to_vec()),
+            val: b"val3".to_vec(),
         },
     ];
 
     for rec in records {
-        match rec.op {
-            Operation::Put => store.put(&rec.key, &rec.val.unwrap()),
-            Operation::Delete => store.del(&rec.key),
+        match rec {
+            ReadRecord::Exists { key, val } => store.put(&key, &val),
+            ReadRecord::Deleted { key } => store.del(&key),
         }
     }
 

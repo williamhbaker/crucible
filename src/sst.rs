@@ -123,12 +123,12 @@ pub fn write_memtable(path: &path::Path, memtable: &memtable::MemTable) {
 
     let mut written = 0;
 
-    data.iter().for_each(|(k, v)| {
-        index_offsets.insert(k, written);
+    data.iter().for_each(|(key, val)| {
+        index_offsets.insert(key, written);
 
-        let rec = match v {
-            Some(v) => WriteRecord::Exists { key: k, val: v },
-            None => WriteRecord::Deleted { key: k },
+        let rec = match val {
+            Some(v) => WriteRecord::Exists { key, val: v },
+            None => WriteRecord::Deleted { key },
         };
 
         written += rec.write_to(&mut w);

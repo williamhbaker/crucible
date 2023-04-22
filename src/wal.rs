@@ -1,31 +1,10 @@
 use std::{
     fs,
-    io::{BufReader, BufWriter, Read, Write},
+    io::{BufReader, BufWriter, Write},
     path,
 };
 
-#[derive(Default)]
-pub struct WalRecord {
-    pub op: Operation,
-    pub key: Vec<u8>,
-    pub val: Option<Vec<u8>>,
-}
-
-#[derive(Default, PartialEq, Debug, Clone)]
-pub enum Operation {
-    #[default]
-    Put,
-    Delete,
-}
-
-impl Operation {
-    fn as_bytes(&self) -> &[u8] {
-        match self {
-            Operation::Put => &[b'0'],
-            Operation::Delete => &[b'1'],
-        }
-    }
-}
+use crate::protocol::{ReadRecord, WriteRecord};
 
 pub struct Wal {
     file: fs::File,
@@ -46,82 +25,41 @@ impl Wal {
         }
     }
 
-    pub fn append(&mut self, op: Operation, key: &[u8], val: Option<&[u8]>) {
+    pub fn append(&mut self, key: &[u8], val: Option<&[u8]>) {
         let mut w = BufWriter::new(&self.file); // TODO: Re-use?
 
-        let key_length = key.len() as u32;
-        let val_length = if let Some(val) = val { val.len() } else { 0 } as u32;
+        let rec = match val {
+            Some(val) => WriteRecord::Exists { key, val },
+            None => WriteRecord::Deleted { key },
+        };
 
-        w.write(&op.as_bytes()).unwrap();
-        w.write(&key_length.to_le_bytes()).unwrap();
-        w.write(&val_length.to_le_bytes()).unwrap();
-
-        w.write(&key).unwrap();
-        if let Some(val) = val {
-            w.write(&val).unwrap();
-        }
-
+        rec.write_to(&mut w);
         w.flush().unwrap();
-
         self.file.sync_all().unwrap();
     }
 }
 
-pub struct IntoIter {
-    r: BufReader<fs::File>,
-}
+impl IntoIterator for Wal {
+    type Item = ReadRecord;
+    type IntoIter = Iter;
 
-impl Wal {
-    pub fn into_iter(self) -> IntoIter {
+    fn into_iter(self) -> Self::IntoIter {
         let file = fs::OpenOptions::new()
             .read(true)
             .create(false)
             .open(self.path)
             .unwrap();
 
-        let r = BufReader::new(file);
-
-        IntoIter { r }
+        Iter(BufReader::new(file))
     }
 }
 
-impl Iterator for IntoIter {
-    type Item = WalRecord;
+pub struct Iter(BufReader<fs::File>);
+
+impl Iterator for Iter {
+    type Item = ReadRecord;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut rec = WalRecord::default();
-
-        // Big enough for operation, key length, and val length
-        // 1 byte + 4 bytes + 4 bytes
-        let mut buf = [0; 9];
-
-        // We might be at the end of the file, or it has a length of 0, or it has an incomplete
-        // header portion.
-        match self.r.read(&mut buf) {
-            Ok(9) => (),
-            Ok(0) => return None,
-            Ok(n) => panic!("bad header in record, had {} bytes", n),
-            Err(e) => panic!("could not read wal record hreader: {}", e),
-        }
-
-        match buf[0] {
-            b'0' => rec.op = Operation::Put,
-            b'1' => rec.op = Operation::Delete,
-            b => panic!("invalid op byte {}", b),
-        }
-
-        let key_length = u32::from_le_bytes(buf[1..5].try_into().unwrap());
-
-        rec.key = vec![0; key_length as usize];
-        self.r.read_exact(&mut rec.key).unwrap();
-
-        if rec.op == Operation::Put {
-            let val_length = u32::from_le_bytes(buf[5..9].try_into().unwrap());
-            let mut v = vec![0; val_length as usize];
-            self.r.read_exact(&mut v).unwrap();
-            rec.val = Some(v)
-        }
-
-        Some(rec)
+        ReadRecord::read_from(&mut self.0)
     }
 }

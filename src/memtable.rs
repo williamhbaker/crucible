@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
-use crate::wal;
+use crate::protocol::ReadRecord;
 
 pub struct MemTable {
-    // A that is present in the HashMap with a value of None represents a specific deletion record.
+    // An entry that is present in the HashMap with a value of None represents a specific deletion
+    // record.
     data: HashMap<Vec<u8>, Option<Vec<u8>>>,
 }
 
@@ -39,14 +40,16 @@ impl MemTable {
     }
 }
 
-impl From<wal::Wal> for MemTable {
-    fn from(wal: wal::Wal) -> Self {
+impl FromIterator<ReadRecord> for MemTable {
+    fn from_iter<I: IntoIterator<Item = ReadRecord>>(iter: I) -> Self {
         let mut out = MemTable::new();
 
-        wal.into_iter().for_each(|rec| match rec.op {
-            wal::Operation::Put => out.put(&rec.key, &rec.val.unwrap()),
-            wal::Operation::Delete => out.del(&rec.key),
-        });
+        for i in iter {
+            match i {
+                ReadRecord::Exists { key, val } => out.put(&key, &val),
+                ReadRecord::Deleted { key } => out.del(&key),
+            }
+        }
 
         out
     }
