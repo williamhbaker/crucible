@@ -104,8 +104,8 @@ pub struct IndexEntry {
     offset: u32,
 }
 
-pub fn write_records<'a, T: Iterator<Item = WriteRecord<'a>>>(path: &path::Path, records: T) {
-    let mut sorted_records: Vec<WriteRecord> = records.collect();
+pub fn write_records<'a, T: IntoIterator<Item = WriteRecord<'a>>>(path: &path::Path, records: T) {
+    let mut sorted_records: Vec<WriteRecord> = records.into_iter().collect();
     sorted_records.sort_unstable_by_key(|v| v.key().to_vec());
 
     let file = fs::OpenOptions::new()
@@ -166,7 +166,7 @@ mod tests {
         let dir = TempDir::new("testing").unwrap();
         let path = dir.path().join("data.sst");
 
-        write_records(&path, memtable.iter());
+        write_records(&path, &memtable);
 
         let mut sst = SST::new(&path);
 

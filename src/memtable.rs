@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{hash_map, HashMap};
 
 use crate::protocol::{ReadRecord, WriteRecord};
 
@@ -34,12 +34,31 @@ impl MemTable {
     pub fn del(&mut self, key: &[u8]) {
         self.data.insert(key.to_vec(), None);
     }
+}
 
-    pub fn iter(&self) -> impl Iterator<Item = WriteRecord> {
-        self.data.iter().map(|(key, val)| match val {
+pub struct Iter<'a> {
+    inner: hash_map::Iter<'a, Vec<u8>, Option<Vec<u8>>>,
+}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = WriteRecord<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(key, val)| match val {
             Some(val) => WriteRecord::Exists { key, val },
             None => WriteRecord::Deleted { key },
         })
+    }
+}
+
+impl<'a> IntoIterator for &'a MemTable {
+    type Item = WriteRecord<'a>;
+    type IntoIter = Iter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Iter {
+            inner: self.data.iter(),
+        }
     }
 }
 
