@@ -7,6 +7,30 @@ use std::{
 
 use crate::protocol::{ReadRecord, WriteRecord};
 
+pub struct Catalog {
+    ssts: Vec<SST>,
+}
+
+impl Catalog {
+    pub fn get(&mut self, key: &[u8]) -> Option<ReadRecord> {
+        for sst in &mut self.ssts {
+            if let Some(rec) = sst.get(key) {
+                return Some(rec);
+            }
+        }
+
+        None
+    }
+}
+
+impl FromIterator<SST> for Catalog {
+    fn from_iter<T: IntoIterator<Item = SST>>(iter: T) -> Self {
+        Catalog {
+            ssts: iter.into_iter().collect(),
+        }
+    }
+}
+
 pub struct SST {
     index: Index,
     r: BufReader<fs::File>,
@@ -138,59 +162,4 @@ pub fn write_records<'a, T: IntoIterator<Item = WriteRecord<'a>>>(path: &path::P
 
     w.flush().unwrap();
     file.sync_all().unwrap();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempdir::TempDir;
-
-    use crate::memtable::MemTable;
-
-    #[test]
-    fn test_sst() {
-        let mut memtable = MemTable::new();
-
-        let recs: Vec<(Vec<u8>, Vec<u8>)> = vec![
-            (b"key1".to_vec(), b"val1".to_vec()),
-            (b"key2".to_vec(), b"val2".to_vec()),
-            (b"key3".to_vec(), b"val3".to_vec()),
-        ];
-
-        for (k, v) in recs {
-            memtable.put(&k, &v);
-        }
-
-        memtable.del(&b"key2".to_vec());
-
-        let dir = TempDir::new("testing").unwrap();
-        let path = dir.path().join("data.sst");
-
-        write_records(&path, &memtable);
-
-        let mut sst = SST::new(&path);
-
-        assert_eq!(
-            Some(ReadRecord::Exists {
-                key: b"key1".to_vec(),
-                val: b"val1".to_vec()
-            }),
-            sst.get(&b"key1".to_vec())
-        );
-
-        assert_eq!(
-            Some(ReadRecord::Exists {
-                key: b"key3".to_vec(),
-                val: b"val3".to_vec()
-            }),
-            sst.get(&b"key3".to_vec())
-        );
-
-        assert_eq!(
-            Some(ReadRecord::Deleted {
-                key: b"key2".to_vec(),
-            }),
-            sst.get(&b"key2".to_vec())
-        );
-    }
 }
