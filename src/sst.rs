@@ -1,19 +1,68 @@
 use std::{
+    cmp,
     collections::HashMap,
     fs,
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
-    path,
+    path::{self},
 };
 
 use crate::protocol::{ReadRecord, WriteRecord};
 
+const SST_EXT: &'static str = "sst";
+
 pub struct Catalog {
-    ssts: Vec<SST>,
+    ssts: Vec<Table>,
+    watermark: usize,
+    data_dir: path::PathBuf,
+}
+
+fn table_sequence(path: &path::Path) -> usize {
+    path.file_stem().unwrap().to_string_lossy().parse().unwrap()
 }
 
 impl Catalog {
+    pub fn new(data_dir: &path::Path) -> Self {
+        let mut watermark = 0;
+
+        let mut ssts: Vec<Table> = fs::read_dir(data_dir)
+            .unwrap()
+            .into_iter()
+            .filter_map(|entry| {
+                let entry = entry.unwrap();
+                let path = entry.path();
+
+                if !path.is_dir() {
+                    if let Some(ext) = path.extension() {
+                        if ext.eq_ignore_ascii_case(SST_EXT) {
+                            // Parse the file stem (name without extension) to update the watermark.
+                            let seq = table_sequence(&path);
+
+                            if seq > watermark {
+                                watermark = seq;
+                            }
+
+                            return Some(Table::new(&path));
+                        }
+                    }
+                }
+
+                None
+            })
+            .collect();
+
+        // Tables must be sorted oldest to newest. The newest tables will be queried first on
+        // lookups.
+        ssts.sort_unstable_by_key(|t| cmp::Reverse(t.sequence));
+
+        Catalog {
+            ssts,
+            watermark,
+            data_dir: data_dir.to_owned(),
+        }
+    }
+
     pub fn get(&mut self, key: &[u8]) -> Option<ReadRecord> {
-        for sst in &mut self.ssts {
+        for sst in self.ssts.iter_mut().rev() {
             if let Some(rec) = sst.get(key) {
                 return Some(rec);
             }
@@ -21,18 +70,61 @@ impl Catalog {
 
         None
     }
-}
 
-impl FromIterator<SST> for Catalog {
-    fn from_iter<T: IntoIterator<Item = SST>>(iter: T) -> Self {
-        Catalog {
-            ssts: iter.into_iter().collect(),
+    pub fn write_records<'a, T: IntoIterator<Item = WriteRecord<'a>>>(&mut self, records: T) {
+        let mut sorted_records: Vec<WriteRecord> = records.into_iter().collect();
+        sorted_records.sort_unstable_by_key(|v| v.key().to_vec());
+
+        let mut path: path::PathBuf = path::PathBuf::from(&self.data_dir);
+        path = path.join(format!("{}", &self.watermark + 1));
+        path.set_extension(SST_EXT);
+
+        let file = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)
+            .unwrap();
+
+        let mut w = BufWriter::new(&file);
+
+        let mut index_offsets: HashMap<&[u8], u32> = HashMap::new();
+
+        let index_start = sorted_records.iter().fold(0, |written, record| {
+            index_offsets.insert(record.key(), written);
+            written + record.write_to(&mut w)
+        });
+
+        for record in &sorted_records {
+            let key = record.key();
+
+            let offset = index_offsets.get(record.key()).unwrap();
+            w.write(&offset.to_le_bytes()).unwrap();
+
+            w.write(&(key.len() as u32).to_le_bytes()).unwrap();
+            w.write(key).unwrap();
         }
+
+        // The final byte is the file offset where the index begins.
+        w.write(&index_start.to_le_bytes()).unwrap();
+
+        w.flush().unwrap();
+        file.sync_all().unwrap();
+
+        // TODO: Instead of reading in this file that was just written, build the SST index while
+        // writing it.
+        let new = Table::new(&path);
+
+        // Add the new table, which must be the highest numbered, to the end of the list of tables.
+        // This preserves the requirement that the tables be in order of oldest to newest.
+        self.ssts.push(new);
+
+        self.watermark += 1;
     }
 }
 
-pub struct SST {
+pub struct Table {
     index: Index,
+    sequence: usize,
     r: BufReader<fs::File>,
 }
 
@@ -56,13 +148,17 @@ impl FromIterator<IndexEntry> for Index {
     }
 }
 
-impl SST {
+impl Table {
     pub fn new(path: &path::Path) -> Self {
         let file = fs::OpenOptions::new().read(true).open(path).unwrap();
         let mut r = BufReader::new(file);
         let index = IndexReader(&mut r).into_iter().collect();
 
-        SST { index, r }
+        Table {
+            index,
+            sequence: table_sequence(&path),
+            r,
+        }
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<ReadRecord> {
@@ -126,40 +222,4 @@ impl<T: Read> Iterator for IndexIter<T> {
 pub struct IndexEntry {
     key: Vec<u8>,
     offset: u32,
-}
-
-pub fn write_records<'a, T: IntoIterator<Item = WriteRecord<'a>>>(path: &path::Path, records: T) {
-    let mut sorted_records: Vec<WriteRecord> = records.into_iter().collect();
-    sorted_records.sort_unstable_by_key(|v| v.key().to_vec());
-
-    let file = fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(path)
-        .unwrap();
-
-    let mut w = BufWriter::new(&file);
-
-    let mut index_offsets: HashMap<&[u8], u32> = HashMap::new();
-
-    let index_start = sorted_records.iter().fold(0, |written, record| {
-        index_offsets.insert(record.key(), written);
-        written + record.write_to(&mut w)
-    });
-
-    for record in &sorted_records {
-        let key = record.key();
-
-        let offset = index_offsets.get(record.key()).unwrap();
-        w.write(&offset.to_le_bytes()).unwrap();
-
-        w.write(&(key.len() as u32).to_le_bytes()).unwrap();
-        w.write(key).unwrap();
-    }
-
-    // The final byte is the file offset where the index begins.
-    w.write(&index_start.to_le_bytes()).unwrap();
-
-    w.flush().unwrap();
-    file.sync_all().unwrap();
 }
