@@ -2,11 +2,13 @@ use std::{
     cmp,
     collections::HashMap,
     fs,
-    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
-    path::{self},
+    io::{BufWriter, Write},
+    path,
 };
 
 use crate::protocol::{ReadRecord, WriteRecord};
+
+use super::{table_sequence, Table};
 
 const SST_EXT: &'static str = "sst";
 
@@ -14,10 +16,6 @@ pub struct Catalog {
     ssts: Vec<Table>,
     watermark: usize,
     data_dir: path::PathBuf,
-}
-
-fn table_sequence(path: &path::Path) -> usize {
-    path.file_stem().unwrap().to_string_lossy().parse().unwrap()
 }
 
 impl Catalog {
@@ -120,106 +118,4 @@ impl Catalog {
 
         self.watermark += 1;
     }
-}
-
-pub struct Table {
-    index: Index,
-    sequence: usize,
-    r: BufReader<fs::File>,
-}
-
-struct Index(HashMap<Vec<u8>, u32>); // Keys (as byte slices) to file offsets
-
-impl Index {
-    fn get_offset(&self, key: &[u8]) -> Option<&u32> {
-        self.0.get(key)
-    }
-}
-
-impl FromIterator<IndexEntry> for Index {
-    fn from_iter<I: IntoIterator<Item = IndexEntry>>(iter: I) -> Self {
-        let mut map = HashMap::new();
-
-        for i in iter {
-            map.insert(i.key, i.offset);
-        }
-
-        Index(map)
-    }
-}
-
-impl Table {
-    pub fn new(path: &path::Path) -> Self {
-        let file = fs::OpenOptions::new().read(true).open(path).unwrap();
-        let mut r = BufReader::new(file);
-        let index = IndexReader(&mut r).into_iter().collect();
-
-        Table {
-            index,
-            sequence: table_sequence(&path),
-            r,
-        }
-    }
-
-    pub fn get(&mut self, key: &[u8]) -> Option<ReadRecord> {
-        match self.index.get_offset(key) {
-            Some(offset) => {
-                self.r.seek(SeekFrom::Start(*offset as u64)).unwrap();
-                // There should always be a record here since we found it in the index.
-                Some(ReadRecord::read_from(&mut self.r).unwrap())
-            }
-            None => None,
-        }
-    }
-}
-
-struct IndexReader<T: Read + Seek>(T);
-
-impl<T: Read + Seek> IntoIterator for IndexReader<T> {
-    type Item = IndexEntry;
-    type IntoIter = IndexIter<T>;
-
-    fn into_iter(mut self) -> Self::IntoIter {
-        self.0.seek(SeekFrom::End(-4)).unwrap();
-
-        // 4 bytes for the starting offset of the index in the file.
-        let mut buf = [0; 4];
-        self.0.read_exact(&mut buf).unwrap();
-
-        let index_start = u32::from_le_bytes(buf[0..4].try_into().unwrap());
-
-        self.0.seek(SeekFrom::Start(index_start as u64)).unwrap();
-
-        IndexIter(self.0)
-    }
-}
-
-struct IndexIter<T: Read>(T);
-
-impl<T: Read> Iterator for IndexIter<T> {
-    type Item = IndexEntry;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // Read record offset & key length. 4 bytes each.
-        let mut buf = [0; 8];
-        match self.0.read(&mut buf) {
-            Ok(8) => (),
-            Ok(4) => return None, // EOF since the footer is 4 bytes
-            Ok(n) => panic!("bad header in index record, had {} bytes", n),
-            Err(e) => panic!("could not read index record header: {}", e),
-        }
-
-        let offset = u32::from_le_bytes(buf[0..4].try_into().unwrap());
-        let key_length = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-
-        let mut key = vec![0; key_length as usize];
-        self.0.read_exact(&mut key).unwrap();
-
-        Some(IndexEntry { key, offset })
-    }
-}
-
-pub struct IndexEntry {
-    key: Vec<u8>,
-    offset: u32,
 }
