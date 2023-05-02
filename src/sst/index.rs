@@ -3,6 +3,8 @@ use std::{
     io::{Read, Seek, SeekFrom},
 };
 
+use crate::protocol::fill_buf;
+
 pub struct Index(HashMap<Vec<u8>, u32>); // Keys (as byte slices) to file offsets
 
 impl Index {
@@ -57,11 +59,13 @@ impl<T: Read> Iterator for IndexIter<T> {
     fn next(&mut self) -> Option<Self::Item> {
         // Read record offset & key length. 4 bytes each.
         let mut buf = [0; 8];
-        match self.0.read(&mut buf) {
+
+        // 4 bytes for the trailer, which is the u32 byte offset of the start of the index.
+        match fill_buf(&mut self.0, &mut buf, 4) {
             Ok(8) => (),
-            Ok(4) => return None, // EOF since the footer is 4 bytes
-            Ok(n) => panic!("bad header in index record, had {} bytes", n),
-            Err(e) => panic!("could not read index record header: {}", e),
+            Ok(0) => return None,
+            Ok(_) => panic!("not reached"),
+            Err(e) => panic!("{}", e),
         }
 
         let offset = u32::from_le_bytes(buf[0..4].try_into().unwrap());

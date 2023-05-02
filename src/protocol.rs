@@ -1,4 +1,7 @@
-use std::{io::Read, io::Write};
+use std::{
+    io::Read,
+    io::{Error, ErrorKind, Write},
+};
 
 const EXISTS_OP_BYTE: u8 = b'0';
 const DELETED_OP_BYTE: u8 = b'1';
@@ -52,13 +55,11 @@ impl ReadRecord {
         // 1 byte + 4 bytes + 4 bytes
         let mut buf = [0; 9];
 
-        // We might be at the end of the file, or it has a length of 0, or it has an incomplete
-        // header portion.
-        match reader.read(&mut buf) {
+        match fill_buf(reader, &mut buf, 0) {
             Ok(9) => (),
             Ok(0) => return None,
-            Ok(n) => panic!("bad header in record, had {} bytes", n),
-            Err(e) => panic!("could not read wal record hreader: {}", e),
+            Ok(_) => panic!("not reached"),
+            Err(e) => panic!("{}", e),
         }
 
         let key_length = u32::from_le_bytes(buf[1..5].try_into().unwrap());
@@ -76,5 +77,41 @@ impl ReadRecord {
             DELETED_OP_BYTE => Some(ReadRecord::Deleted { key: key }),
             b => panic!("invalid op byte {}", b),
         }
+    }
+}
+
+pub fn fill_buf<R: Read>(reader: &mut R, buf: &mut [u8], trailer: usize) -> Result<usize, Error> {
+    let mut read = 0;
+    let mut start = 0;
+    let end = buf.len();
+
+    loop {
+        match reader.read(&mut buf[start..end]) {
+            Ok(0) => {
+                // EOF. If we've only read the trailer, it means we got here cleanly. Otherwise, we
+                // couldn't read as much as we thought and should error.
+                return if read == trailer {
+                    Ok(0)
+                } else {
+                    Err(Error::from(ErrorKind::UnexpectedEof))
+                };
+            }
+            Ok(n) if n == (end - start) => {
+                // Filled the buffer, maybe not on the first pass.
+                read += n;
+                return Ok(read);
+            }
+            Ok(n) => {
+                // Read some bytes but not enough, so try again.
+                read += n;
+                start += n;
+            }
+            Err(e) => {
+                match e.kind() {
+                    ErrorKind::Interrupted => (), // Ignore & keep going
+                    _ => return Err(e),
+                }
+            }
+        };
     }
 }
