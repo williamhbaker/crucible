@@ -15,7 +15,8 @@ impl Writer {
         Writer {
             w: BufWriter::new(
                 fs::OpenOptions::new()
-                    .append(true)
+                    .write(true)
+                    .truncate(true)
                     .create(true)
                     .open(path)
                     .unwrap(),
