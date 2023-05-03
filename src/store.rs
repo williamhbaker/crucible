@@ -1,4 +1,4 @@
-use std::path;
+use std::{fs, path};
 
 use crate::{memtable::MemTable, protocol::WriteRecord, sst::Catalog, wal};
 
@@ -17,10 +17,12 @@ impl Store {
         let mut sst = Catalog::new(&data_dir);
 
         // Convert any left-over wal file into an sst.
-        if wal_file_path.try_exists().unwrap() {
-            let memtable: MemTable = wal::Reader::new(&wal_file_path).into_iter().collect();
-            sst.write_records(&memtable);
-        }
+        if let Some(len) = fs::metadata(&wal_file_path).ok().map(|meta| meta.len()) {
+            if len > 0 {
+                let memtable: MemTable = wal::Reader::new(&wal_file_path).into_iter().collect();
+                sst.write_records(&memtable);
+            }
+        };
 
         Store {
             memtable: MemTable::new(),
