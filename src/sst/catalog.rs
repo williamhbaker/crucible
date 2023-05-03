@@ -1,5 +1,4 @@
 use std::{
-    cmp,
     collections::HashMap,
     fs,
     io::{BufWriter, Write},
@@ -48,9 +47,9 @@ impl Catalog {
             })
             .collect();
 
-        // Tables must be sorted oldest to newest. The newest tables will be queried first on
-        // lookups.
-        ssts.sort_unstable_by_key(|t| cmp::Reverse(t.sequence));
+        // Tables must be sorted oldest to newest (ascending sequence). The newest tables will be
+        // queried first on lookups. Newer tables have a higher sequence number.
+        ssts.sort_unstable_by_key(|t| t.sequence);
 
         Catalog {
             ssts,
