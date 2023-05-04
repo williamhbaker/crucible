@@ -58,8 +58,8 @@ impl Catalog {
         }
     }
 
-    pub fn get(&mut self, key: &[u8]) -> Option<ReadRecord> {
-        for sst in self.ssts.iter_mut().rev() {
+    pub fn get(&self, key: &[u8]) -> Option<ReadRecord> {
+        for sst in self.ssts.iter().rev() {
             if let Some(rec) = sst.get(key) {
                 return Some(rec);
             }

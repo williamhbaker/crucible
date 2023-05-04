@@ -69,7 +69,7 @@ fn test_store() {
     // Update a value in the store then re-open it. This will create a second SST.
     store.put(b"key3".as_ref(), b"val3updated");
     drop(store);
-    let mut store = Store::new(dir.path());
+    let store = Store::new(dir.path());
     assert_eq!(None, store.get(b"key1".to_vec().as_ref()));
     assert_eq!(None, store.get(b"key2".to_vec().as_ref()));
     assert_eq!(

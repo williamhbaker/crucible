@@ -36,7 +36,7 @@ impl Store {
         self.memtable.put(key, val);
     }
 
-    pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         if let Some(val) = self.memtable.get(key) {
             Some(val.to_vec())
         } else if let Some(rec) = self.catalog.get(key) {
