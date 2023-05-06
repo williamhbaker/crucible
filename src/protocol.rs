@@ -1,6 +1,6 @@
 use std::{
     io::Read,
-    io::{Error, ErrorKind, Write},
+    io::{self, Error, ErrorKind, Write},
 };
 
 const EXISTS_OP_BYTE: u8 = b'0';
@@ -12,7 +12,7 @@ pub enum WriteRecord<'a> {
 }
 
 impl<'a> WriteRecord<'a> {
-    pub fn write_to<T: Write>(&self, w: &mut T) -> u32 {
+    pub fn write_to<T: Write>(&self, w: &mut T) -> io::Result<usize> {
         let mut written = 0;
 
         let (op_byte, key, val) = match self {
@@ -23,16 +23,16 @@ impl<'a> WriteRecord<'a> {
         let key_length = key.len() as u32;
         let val_length = if let Some(val) = val { val.len() } else { 0 } as u32;
 
-        written += w.write(&vec![op_byte]).unwrap();
-        written += w.write(&key_length.to_le_bytes()).unwrap();
-        written += w.write(&val_length.to_le_bytes()).unwrap();
+        written += w.write(&vec![op_byte])?;
+        written += w.write(&key_length.to_le_bytes())?;
+        written += w.write(&val_length.to_le_bytes())?;
 
-        written += w.write(key).unwrap();
+        written += w.write(key)?;
         if let Some(val) = val {
-            written += w.write(&val).unwrap();
+            written += w.write(&val)?;
         }
 
-        written as u32
+        Ok(written)
     }
 
     pub fn key(&self) -> &[u8] {
@@ -50,37 +50,46 @@ pub enum ReadRecord {
 }
 
 impl ReadRecord {
-    pub fn read_from<R: Read>(reader: &mut R) -> Option<Self> {
+    pub fn read_from<R: Read>(reader: &mut R) -> io::Result<Option<Self>> {
         // Big enough for operation, key length, and val length
         // 1 byte + 4 bytes + 4 bytes
         let mut buf = [0; 9];
 
-        match fill_buf(reader, &mut buf, 0) {
-            Ok(9) => (),
-            Ok(0) => return None,
-            Ok(_) => panic!("not reached"),
-            Err(e) => panic!("{}", e),
+        if fill_buf(reader, &mut buf, 0)?.is_none() {
+            return Ok(None);
         }
 
-        let key_length = u32::from_le_bytes(buf[1..5].try_into().unwrap());
+        let key_length = u32::from_le_bytes(
+            buf[1..5]
+                .try_into()
+                .expect("must convert slice to byte array"),
+        );
         let mut key = vec![0; key_length as usize];
-        reader.read_exact(&mut key).unwrap();
+        reader.read_exact(&mut key)?;
 
         match buf[0] {
             EXISTS_OP_BYTE => {
-                let val_length = u32::from_le_bytes(buf[5..9].try_into().unwrap());
+                let val_length = u32::from_le_bytes(
+                    buf[5..9]
+                        .try_into()
+                        .expect("must convert slice to byte array"),
+                );
                 let mut val = vec![0; val_length as usize];
-                reader.read_exact(&mut val).unwrap();
+                reader.read_exact(&mut val)?;
 
-                Some(ReadRecord::Exists { key: key, val: val })
+                Ok(Some(ReadRecord::Exists { key: key, val: val }))
             }
-            DELETED_OP_BYTE => Some(ReadRecord::Deleted { key: key }),
+            DELETED_OP_BYTE => Ok(Some(ReadRecord::Deleted { key: key })),
             b => panic!("invalid op byte {}", b),
         }
     }
 }
 
-pub fn fill_buf<R: Read>(reader: &mut R, buf: &mut [u8], trailer: usize) -> Result<usize, Error> {
+pub fn fill_buf<R: Read>(
+    reader: &mut R,
+    buf: &mut [u8],
+    trailer: usize,
+) -> io::Result<Option<usize>> {
     let mut read = 0;
     let mut start = 0;
     let end = buf.len();
@@ -91,7 +100,7 @@ pub fn fill_buf<R: Read>(reader: &mut R, buf: &mut [u8], trailer: usize) -> Resu
                 // EOF. If we've only read the trailer, it means we got here cleanly. Otherwise, we
                 // couldn't read as much as we thought and should error.
                 return if read == trailer {
-                    Ok(0)
+                    Ok(Some(0))
                 } else {
                     Err(Error::from(ErrorKind::UnexpectedEof))
                 };
@@ -99,7 +108,7 @@ pub fn fill_buf<R: Read>(reader: &mut R, buf: &mut [u8], trailer: usize) -> Resu
             Ok(n) if n == (end - start) => {
                 // Filled the buffer, maybe not on the first pass.
                 read += n;
-                return Ok(read);
+                return Ok(Some(read));
             }
             Ok(n) => {
                 // Read some bytes but not enough, so try again.
