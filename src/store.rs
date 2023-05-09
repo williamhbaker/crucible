@@ -1,6 +1,6 @@
-use std::{fs, path};
+use std::{fs, io, path};
 
-use crate::{memtable::MemTable, protocol::WriteRecord, sst::Catalog, wal};
+use crate::{memtable::MemTable, protocol::WriteRecord, sst::Catalog, wal, StoreError};
 
 const WAL_FILE_NAME: &'static str = "data.wal";
 
@@ -11,7 +11,7 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new(data_dir: &path::Path) -> Self {
+    pub fn new(data_dir: &path::Path) -> Result<Store, StoreError> {
         let wal_file_path = data_dir.join(&WAL_FILE_NAME);
 
         let mut sst = Catalog::new(&data_dir);
@@ -19,16 +19,20 @@ impl Store {
         // Convert any left-over wal file into an sst.
         if let Some(len) = fs::metadata(&wal_file_path).ok().map(|meta| meta.len()) {
             if len > 0 {
-                let memtable: MemTable = wal::Reader::new(&wal_file_path).into_iter().collect();
+                let memtable: MemTable = wal::Reader::new(&wal_file_path)
+                    .map_err(|e| StoreError::WalRecovery(e))?
+                    .into_iter()
+                    .collect::<Result<MemTable, io::Error>>()
+                    .map_err(|e| StoreError::WalRecovery(e))?;
                 sst.write_records(&memtable);
             }
         };
 
-        Store {
+        Ok(Store {
             memtable: MemTable::new(),
-            wal: wal::Writer::new(&wal_file_path),
+            wal: wal::Writer::new(&wal_file_path).map_err(|e| StoreError::WalInitialization(e))?,
             catalog: sst,
-        }
+        })
     }
 
     pub fn put(&mut self, key: &[u8], val: &[u8]) {
