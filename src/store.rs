@@ -14,7 +14,7 @@ impl Store {
     pub fn new(data_dir: &path::Path) -> Result<Store, StoreError> {
         let wal_file_path = data_dir.join(&WAL_FILE_NAME);
 
-        let mut sst = Catalog::new(&data_dir);
+        let mut sst = Catalog::new(&data_dir).map_err(|e| StoreError::CatalogInitialization(e))?;
 
         // Convert any left-over wal file into an sst.
         if let Some(len) = fs::metadata(&wal_file_path).ok().map(|meta| meta.len()) {
@@ -24,7 +24,9 @@ impl Store {
                     .into_iter()
                     .collect::<Result<MemTable, io::Error>>()
                     .map_err(|e| StoreError::WalRecovery(e))?;
-                sst.write_records(&memtable);
+
+                sst.write_records(&memtable)
+                    .map_err(|e| StoreError::WalRecovery(e))?;
             }
         };
 
@@ -35,26 +37,28 @@ impl Store {
         })
     }
 
-    pub fn put(&mut self, key: &[u8], val: &[u8]) {
-        self.wal.append(WriteRecord::Exists { key, val });
+    pub fn put(&mut self, key: &[u8], val: &[u8]) -> io::Result<()> {
+        self.wal.append(WriteRecord::Exists { key, val })?;
         self.memtable.put(key, val);
+        Ok(())
     }
 
-    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+    pub fn get(&self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
         if let Some(val) = self.memtable.get(key) {
-            Some(val.to_vec())
-        } else if let Some(rec) = self.catalog.get(key) {
+            Ok(Some(val.to_vec()))
+        } else if let Some(rec) = self.catalog.get(key)? {
             match rec {
-                crate::protocol::ReadRecord::Exists { val, .. } => Some(val),
-                crate::protocol::ReadRecord::Deleted { .. } => None,
+                crate::protocol::ReadRecord::Exists { val, .. } => Ok(Some(val)),
+                crate::protocol::ReadRecord::Deleted { .. } => Ok(None),
             }
         } else {
-            None
+            Ok(None)
         }
     }
 
-    pub fn del(&mut self, key: &[u8]) {
-        self.wal.append(WriteRecord::Deleted { key });
-        self.memtable.del(key)
+    pub fn del(&mut self, key: &[u8]) -> io::Result<()> {
+        self.wal.append(WriteRecord::Deleted { key })?;
+        self.memtable.del(key);
+        Ok(())
     }
 }

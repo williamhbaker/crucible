@@ -11,6 +11,7 @@ pub enum StoreError {
     WalRecovery(io::Error),
     WalConversion(io::Error),
     WalInitialization(io::Error),
+    CatalogInitialization(io::Error),
 }
 
 impl fmt::Display for StoreError {
@@ -21,6 +22,7 @@ impl fmt::Display for StoreError {
                 write!(f, "Failed to compact WAL file to a sorted string table.")
             }
             Self::WalInitialization(_) => write!(f, "Failed to create new WAL file."),
+            Self::CatalogInitialization(_) => write!(f, "Failed to initialized SST catalog."),
         }
     }
 }
@@ -31,6 +33,7 @@ impl Error for StoreError {
             Self::WalRecovery(err) => Some(err),
             Self::WalConversion(err) => Some(err),
             Self::WalInitialization(err) => Some(err),
+            Self::CatalogInitialization(err) => Some(err),
         }
     }
 

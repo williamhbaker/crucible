@@ -10,7 +10,7 @@ use tempdir::TempDir;
 #[test]
 fn test_store() {
     let dir = TempDir::new("testing").unwrap();
-    let mut store = Store::new(dir.path());
+    let mut store = Store::new(dir.path()).unwrap();
 
     let records = vec![
         ReadRecord::Exists {
@@ -36,45 +36,54 @@ fn test_store() {
 
     for rec in records {
         match rec {
-            ReadRecord::Exists { key, val } => store.put(&key, &val),
-            ReadRecord::Deleted { key } => store.del(&key),
+            ReadRecord::Exists { key, val } => store.put(&key, &val).unwrap(),
+            ReadRecord::Deleted { key } => store.del(&key).unwrap(),
         }
     }
 
-    assert_eq!(None, store.get(b"key1".to_vec().as_ref()));
+    assert_eq!(None, store.get(b"key1".to_vec().as_ref()).unwrap());
     assert_eq!(
         Some(b"val2updated".to_vec()),
-        store.get(b"key2".to_vec().as_ref())
+        store.get(b"key2".to_vec().as_ref()).unwrap()
     );
-    assert_eq!(Some(b"val3".to_vec()), store.get(b"key3".to_vec().as_ref()));
+    assert_eq!(
+        Some(b"val3".to_vec()),
+        store.get(b"key3".to_vec().as_ref()).unwrap()
+    );
 
     // Re-open and the results are the same.
     drop(store);
-    let mut store = Store::new(dir.path());
-    assert_eq!(None, store.get(b"key1".to_vec().as_ref()));
+    let mut store = Store::new(dir.path()).unwrap();
+    assert_eq!(None, store.get(b"key1".to_vec().as_ref()).unwrap());
     assert_eq!(
         Some(b"val2updated".to_vec()),
-        store.get(b"key2".to_vec().as_ref())
+        store.get(b"key2".to_vec().as_ref()).unwrap()
     );
-    assert_eq!(Some(b"val3".to_vec()), store.get(b"key3".to_vec().as_ref()));
+    assert_eq!(
+        Some(b"val3".to_vec()),
+        store.get(b"key3".to_vec().as_ref()).unwrap()
+    );
 
     // Delete from the store then re-open it.
-    store.del(b"key2".as_ref());
+    store.del(b"key2".as_ref()).unwrap();
     drop(store);
-    let mut store = Store::new(dir.path());
-    assert_eq!(None, store.get(b"key1".to_vec().as_ref()));
-    assert_eq!(None, store.get(b"key2".to_vec().as_ref()));
-    assert_eq!(Some(b"val3".to_vec()), store.get(b"key3".to_vec().as_ref()));
+    let mut store = Store::new(dir.path()).unwrap();
+    assert_eq!(None, store.get(b"key1".to_vec().as_ref()).unwrap());
+    assert_eq!(None, store.get(b"key2".to_vec().as_ref()).unwrap());
+    assert_eq!(
+        Some(b"val3".to_vec()),
+        store.get(b"key3".to_vec().as_ref()).unwrap()
+    );
 
     // Update a value in the store then re-open it. This will create a second SST.
-    store.put(b"key3".as_ref(), b"val3updated");
+    store.put(b"key3".as_ref(), b"val3updated").unwrap();
     drop(store);
-    let store = Store::new(dir.path());
-    assert_eq!(None, store.get(b"key1".to_vec().as_ref()));
-    assert_eq!(None, store.get(b"key2".to_vec().as_ref()));
+    let store = Store::new(dir.path()).unwrap();
+    assert_eq!(None, store.get(b"key1".to_vec().as_ref()).unwrap());
+    assert_eq!(None, store.get(b"key2".to_vec().as_ref()).unwrap());
     assert_eq!(
         Some(b"val3updated".to_vec()),
-        store.get(b"key3".to_vec().as_ref())
+        store.get(b"key3".to_vec().as_ref()).unwrap()
     );
 }
 
@@ -104,7 +113,7 @@ fn stress_test() {
     let val_length = 1..4096;
 
     let dir = TempDir::new("testing").unwrap();
-    let mut store = Store::new(dir.path());
+    let mut store = Store::new(dir.path()).unwrap();
     let mut ref_store: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
     let mut pool: VecDeque<Vec<u8>> = VecDeque::with_capacity(update_pool_size);
 
@@ -120,7 +129,7 @@ fn stress_test() {
         if rand % restart_probability == 0 {
             // Close an re-open the store, which will convert any left-over wal file into an sst.
             drop(store);
-            store = Store::new(dir.path());
+            store = Store::new(dir.path()).unwrap();
             continue;
         }
 
@@ -135,7 +144,7 @@ fn stress_test() {
 
             // Delete it from both the reference store and the test store.
             ref_store.remove(&k).unwrap();
-            store.del(&k);
+            store.del(&k).unwrap();
 
             continue;
         }
@@ -158,7 +167,7 @@ fn stress_test() {
 
             // Update it in both the reference store and the test store.
             ref_store.insert(k.to_vec(), new_val.clone()).unwrap();
-            store.put(&k, &new_val); // TODO: It would be nice if this worked like HashMap, returning an option.
+            store.put(&k, &new_val).unwrap(); // TODO: It would be nice if this worked like HashMap, returning an option.
 
             continue;
         }
@@ -187,7 +196,7 @@ fn stress_test() {
             }
             pool.push_back(key.clone());
 
-            store.put(&key, &val);
+            store.put(&key, &val).unwrap();
             ref_store.insert(key, val);
 
             break;
@@ -196,7 +205,7 @@ fn stress_test() {
 
     // All values in the reference in-memory store should exist in the store under test.
     for (ref_key, ref_val) in ref_store.iter() {
-        let ref_got = store.get(ref_key).unwrap();
+        let ref_got = store.get(ref_key).unwrap().unwrap();
         assert_eq!(ref_val, &ref_got);
     }
 

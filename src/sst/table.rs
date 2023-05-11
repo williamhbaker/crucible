@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{BufReader, Seek, SeekFrom},
+    io::{self, BufReader, Seek, SeekFrom},
     path,
 };
 
@@ -15,27 +15,26 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn new(path: &path::Path) -> Self {
-        let file = fs::OpenOptions::new().read(true).open(path).unwrap();
+    pub fn new(path: &path::Path) -> io::Result<Self> {
+        let file = fs::OpenOptions::new().read(true).open(path)?;
         let mut r = BufReader::new(&file);
-        let index = IndexReader(&mut r).into_iter().collect();
 
-        Table {
-            index,
+        Ok(Table {
+            index: Index::from_index_reader(IndexReader(&mut r))?,
             sequence: table_sequence(&path),
             file,
-        }
+        })
     }
 
-    pub fn get(&self, key: &[u8]) -> Option<ReadRecord> {
+    pub fn get(&self, key: &[u8]) -> io::Result<Option<ReadRecord>> {
         match self.index.get_offset(key) {
             Some(offset) => {
-                let mut r = &self.file.try_clone().unwrap();
-                r.seek(SeekFrom::Start(*offset as u64)).unwrap();
+                let mut r = &self.file.try_clone()?;
+                r.seek(SeekFrom::Start(*offset as u64))?;
                 // There should always be a record here since we found it in the index.
-                Some(ReadRecord::read_from(&mut r).unwrap())
+                ReadRecord::read_from(&mut r)
             }
-            None => None,
+            None => Ok(None),
         }
     }
 }
