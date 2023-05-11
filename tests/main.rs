@@ -167,7 +167,9 @@ fn stress_test() {
 
             // Update it in both the reference store and the test store.
             ref_store.insert(k.to_vec(), new_val.clone()).unwrap();
-            store.put(&k, &new_val).unwrap(); // TODO: It would be nice if this worked like HashMap, returning an option.
+            // TODO: It would be nice if this worked like HashMap, returning an option. But that
+            // would require a lookup for every put.
+            store.put(&k, &new_val).unwrap();
 
             continue;
         }

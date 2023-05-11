@@ -106,7 +106,7 @@ impl<T: Read> Iterator for IndexIter<T> {
         // 4 bytes for the trailer, which is the u32 byte offset of the start of the index.
         match fill_buf(&mut self.r, &mut buf, 4) {
             Ok(Some(8)) => (),
-            Ok(Some(0)) => return None,
+            Ok(None) => return None,
             Ok(_) => unreachable!(),
             Err(e) => {
                 self.done = true;

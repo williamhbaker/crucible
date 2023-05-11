@@ -100,7 +100,7 @@ pub fn fill_buf<R: Read>(
                 // EOF. If we've only read the trailer, it means we got here cleanly. Otherwise, we
                 // couldn't read as much as we thought and should error.
                 return if read == trailer {
-                    Ok(Some(0))
+                    Ok(None)
                 } else {
                     Err(Error::from(ErrorKind::UnexpectedEof))
                 };
