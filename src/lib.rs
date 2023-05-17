@@ -1,5 +1,6 @@
 use std::{error::Error, fmt, io};
 
+pub mod compactor;
 pub mod memtable;
 pub mod protocol;
 pub mod sst;

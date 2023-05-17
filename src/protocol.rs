@@ -83,6 +83,13 @@ impl ReadRecord {
             b => panic!("invalid op byte {}", b),
         }
     }
+
+    pub fn key(&self) -> &[u8] {
+        match self {
+            ReadRecord::Exists { key, .. } => key,
+            ReadRecord::Deleted { key } => key,
+        }
+    }
 }
 
 pub fn fill_buf<R: Read>(
