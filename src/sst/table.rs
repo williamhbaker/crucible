@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{self, BufReader, Seek, SeekFrom},
+    io::{self, BufReader, Read, Seek, SeekFrom},
     path,
 };
 
@@ -36,5 +36,54 @@ impl Table {
             }
             None => Ok(None),
         }
+    }
+}
+
+impl IntoIterator for Table {
+    type Item = io::Result<ReadRecord>;
+    type IntoIter = TableIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let mut table_iter = TableIter {
+            r: BufReader::new(self.file),
+            done: false,
+            setup_err: None,
+        };
+
+        if let Err(e) = table_iter.r.seek(SeekFrom::Start(0)) {
+            table_iter.setup_err = Some(Err(e));
+        }
+
+        table_iter
+    }
+}
+
+pub struct TableIter {
+    r: BufReader<fs::File>,
+    done: bool,
+    setup_err: Option<io::Result<ReadRecord>>,
+}
+
+impl Iterator for TableIter {
+    type Item = io::Result<ReadRecord>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        if self.setup_err.is_some() {
+            self.done = true;
+            return self.setup_err.take();
+        }
+
+        ReadRecord::read_from(&mut self.r)
+            .transpose()
+            .and_then(|res| {
+                if res.is_err() {
+                    self.done = true;
+                }
+                Some(res)
+            })
     }
 }
