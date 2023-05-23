@@ -1,6 +1,91 @@
-use std::{cmp, collections::BinaryHeap};
+use std::{
+    cmp,
+    collections::BinaryHeap,
+    fs,
+    io::{self, BufWriter, Write},
+    path,
+};
 
-use crate::protocol::ReadRecord;
+use uuid::Uuid;
+
+use crate::protocol::{self, ReadRecord};
+
+pub struct CombineTable<T>
+where
+    T: Iterator<Item = ReadRecord>,
+{
+    table: T,
+    level: u32,
+    sequence: Option<u32>,
+}
+
+pub fn combine_tables<T: Iterator<Item = ReadRecord>>(
+    tables: Vec<CombineTable<T>>,
+    size_limit: u32, // Excluding index
+    output_level: u32,
+    output_dir: &path::Path,
+) -> io::Result<()> {
+    let mut merge = MergeIter::new();
+
+    for table in tables.into_iter() {
+        merge.push_iter(table.table, table.level, table.sequence)
+    }
+
+    let mut merge = merge.peekable();
+
+    loop {
+        let fname = Uuid::new_v4();
+        let path = output_dir.join(format!("{}", output_level));
+        // Create the directory if it doesn't yet exist.
+        fs::create_dir(&path)?;
+        let mut path = path.join(fname.to_string());
+        path.set_extension(protocol::SST_EXT);
+
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(&path)?;
+
+        let mut w = BufWriter::new(&file);
+        let mut written = 0;
+        // Tuple of (key, offset)
+        let mut index_offsets: Vec<(Vec<u8>, u32)> = Vec::new();
+
+        // TODO: These will need to be added to some kind of meta-index.
+        let mut _key_start = vec![];
+        let mut _key_end = vec![];
+        if let Some(record) = merge.peek() {
+            _key_start = record.key().to_vec();
+        }
+
+        while written < size_limit {
+            if let Some(record) = merge.next() {
+                index_offsets.push((record.key().to_vec(), written));
+                written += record.write_to(&mut w)? as u32;
+                _key_end = record.key().to_vec();
+            } else {
+                break;
+            }
+        }
+
+        // Hit the size limit, so now write out the index and finish the file.
+        for (key, offset) in index_offsets.into_iter() {
+            w.write(&offset.to_le_bytes())?;
+            w.write(&(key.len() as u32).to_le_bytes())?;
+            w.write(&key)?;
+        }
+
+        // The final byte is the file offset where the index begins.
+        w.write(&written.to_le_bytes())?;
+
+        w.flush()?;
+        file.sync_all()?;
+
+        if merge.peek().is_none() {
+            return Ok(());
+        }
+    }
+}
 
 struct IterBuf<T>
 where
@@ -112,10 +197,12 @@ where
         while let Some(nn) = self.iters.peek() {
             let next_record = nn.buf.as_ref().expect("Buffer must not be None");
             if record.key() == next_record.key() {
-                // Pop and re-fill the buf of the next iterator.
-                self.iters.pop().map(|mut taken| {
-                    taken.buf = taken.iter.next();
-                    self.iters.push(taken);
+                // Pop and re-fill the buffer of the next iterator.
+                self.iters.pop().map(|mut popped| {
+                    if let Some(buf) = popped.iter.next() {
+                        popped.buf = Some(buf);
+                        self.iters.push(popped);
+                    }
                 });
             } else {
                 break;
@@ -135,11 +222,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use tempdir::TempDir;
+
+    use crate::sst::Catalog;
+
     use super::*;
 
     #[test]
-    fn test_merge_iter() {
-        let iter_1: Vec<ReadRecord> = vec![
+    fn test_combine_tables() {
+        let records_1 = vec![
             ReadRecord::Exists {
                 key: b"key1".to_vec(),
                 val: b"val1_1".to_vec(),
@@ -148,17 +239,9 @@ mod tests {
                 key: b"key2".to_vec(),
                 val: b"val2_1".to_vec(),
             },
-            ReadRecord::Exists {
-                key: b"key3".to_vec(),
-                val: b"val3_1".to_vec(),
-            },
         ];
 
-        let iter_2: Vec<ReadRecord> = vec![
-            ReadRecord::Exists {
-                key: b"key1".to_vec(),
-                val: b"val1_2".to_vec(),
-            },
+        let records_2 = vec![
             ReadRecord::Exists {
                 key: b"key2".to_vec(),
                 val: b"val2_2".to_vec(),
@@ -171,38 +254,103 @@ mod tests {
                 key: b"key4".to_vec(),
                 val: b"val4_2".to_vec(),
             },
+            ReadRecord::Deleted {
+                key: b"key6".to_vec(),
+            },
         ];
 
-        let iter_3: Vec<ReadRecord> = vec![ReadRecord::Deleted {
-            key: b"key2".to_vec(),
+        let records_3 = vec![
+            ReadRecord::Exists {
+                key: b"key2".to_vec(),
+                val: b"val2_3".to_vec(),
+            },
+            ReadRecord::Exists {
+                key: b"key5".to_vec(),
+                val: b"val5_3".to_vec(),
+            },
+        ];
+
+        let records_4 = vec![ReadRecord::Exists {
+            key: b"key6".to_vec(),
+            val: b"val6_4".to_vec(),
         }];
 
-        let mut merged = MergeIter::new();
-
-        merged.push_iter(iter_1.into_iter(), 0, Some(0));
-        merged.push_iter(iter_2.into_iter(), 1, None);
-        merged.push_iter(iter_3.into_iter(), 0, Some(1));
-
-        let want: Vec<ReadRecord> = vec![
-            ReadRecord::Exists {
-                key: b"key1".to_vec(),
-                val: b"val1_1".to_vec(),
+        let tables = vec![
+            CombineTable {
+                table: records_1.into_iter(),
+                level: 0,
+                sequence: Some(0),
             },
-            ReadRecord::Deleted {
-                key: b"key2".to_vec(),
+            CombineTable {
+                table: records_2.into_iter(),
+                level: 0,
+                sequence: Some(1),
             },
-            ReadRecord::Exists {
-                key: b"key3".to_vec(),
-                val: b"val3_1".to_vec(),
+            CombineTable {
+                table: records_3.into_iter(),
+                level: 1,
+                sequence: None,
             },
-            ReadRecord::Exists {
-                key: b"key4".to_vec(),
-                val: b"val4_2".to_vec(),
+            CombineTable {
+                table: records_4.into_iter(),
+                level: 2,
+                sequence: None,
             },
         ];
 
-        for (got, want) in merged.zip(want.into_iter()) {
-            assert_eq!(want, got)
+        let dir = TempDir::new("testing").unwrap();
+        combine_tables(tables, 1024 * 1024, 1, dir.path()).unwrap();
+
+        let target_dir = dir.path().join(format!("{}", 1));
+
+        let catalog = Catalog::new(&target_dir).unwrap();
+
+        let cases = vec![
+            (
+                b"key1",
+                ReadRecord::Exists {
+                    key: b"key1".to_vec(),
+                    val: b"val1_1".to_vec(),
+                },
+            ),
+            (
+                b"key2",
+                ReadRecord::Exists {
+                    key: b"key2".to_vec(),
+                    val: b"val2_2".to_vec(),
+                },
+            ),
+            (
+                b"key3",
+                ReadRecord::Exists {
+                    key: b"key3".to_vec(),
+                    val: b"val3_2".to_vec(),
+                },
+            ),
+            (
+                b"key4",
+                ReadRecord::Exists {
+                    key: b"key4".to_vec(),
+                    val: b"val4_2".to_vec(),
+                },
+            ),
+            (
+                b"key5",
+                ReadRecord::Exists {
+                    key: b"key5".to_vec(),
+                    val: b"val5_3".to_vec(),
+                },
+            ),
+            (
+                b"key6",
+                ReadRecord::Deleted {
+                    key: b"key6".to_vec(),
+                },
+            ),
+        ];
+
+        for (key, want) in cases.into_iter() {
+            assert_eq!(Some(want), catalog.get(key).unwrap());
         }
     }
 }

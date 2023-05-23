@@ -5,15 +5,13 @@ use std::{
     path,
 };
 
-use crate::protocol::{ReadRecord, WriteRecord};
+use crate::protocol::{ReadRecord, WriteRecord, SST_EXT};
 
 use super::{table_sequence, Table};
 
-const SST_EXT: &'static str = "sst";
-
 pub struct Catalog {
     ssts: Vec<Table>,
-    watermark: usize,
+    watermark: u32,
     data_dir: path::PathBuf,
 }
 
@@ -21,6 +19,8 @@ impl Catalog {
     pub fn new(data_dir: &path::Path) -> io::Result<Self> {
         let mut watermark = 0;
 
+        // TODO: This should descend to sub-dirs and take that into account when calculating
+        // sequence, since higher-level (older) tables will not have a sequence.
         let mut ssts = fs::read_dir(data_dir)?
             .into_iter()
             .collect::<io::Result<Vec<fs::DirEntry>>>()?
@@ -32,10 +32,10 @@ impl Catalog {
                     if let Some(ext) = path.extension() {
                         if ext.eq_ignore_ascii_case(SST_EXT) {
                             // Parse the file stem (name without extension) to update the watermark.
-                            let seq = table_sequence(&path);
-
-                            if seq > watermark {
-                                watermark = seq;
+                            if let Some(seq) = table_sequence(&path) {
+                                if seq > watermark {
+                                    watermark = seq;
+                                }
                             }
 
                             return Some(Table::new(&path));

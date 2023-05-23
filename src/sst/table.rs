@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{self, BufReader, Read, Seek, SeekFrom},
+    io::{self, BufReader, Seek, SeekFrom},
     path,
 };
 
@@ -10,7 +10,7 @@ use super::{table_sequence, Index, IndexReader};
 
 pub struct Table {
     index: Index,
-    pub sequence: usize,
+    pub sequence: Option<u32>,
     file: fs::File,
 }
 

@@ -5,6 +5,7 @@ use std::{
 
 const EXISTS_OP_BYTE: u8 = b'0';
 const DELETED_OP_BYTE: u8 = b'1';
+pub const SST_EXT: &'static str = "sst";
 
 pub enum WriteRecord<'a> {
     Exists { key: &'a [u8], val: &'a [u8] },
@@ -82,6 +83,29 @@ impl ReadRecord {
             DELETED_OP_BYTE => Ok(Some(ReadRecord::Deleted { key: key })),
             b => panic!("invalid op byte {}", b),
         }
+    }
+
+    pub fn write_to<T: Write>(&self, w: &mut T) -> io::Result<usize> {
+        let mut written = 0;
+
+        let (op_byte, key, val) = match self {
+            ReadRecord::Exists { key, val } => (EXISTS_OP_BYTE, key, Some(val)),
+            ReadRecord::Deleted { key } => (DELETED_OP_BYTE, key, None),
+        };
+
+        let key_length = key.len() as u32;
+        let val_length = if let Some(val) = val { val.len() } else { 0 } as u32;
+
+        written += w.write(&vec![op_byte])?;
+        written += w.write(&key_length.to_le_bytes())?;
+        written += w.write(&val_length.to_le_bytes())?;
+
+        written += w.write(key)?;
+        if let Some(val) = val {
+            written += w.write(&val)?;
+        }
+
+        Ok(written)
     }
 
     pub fn key(&self) -> &[u8] {

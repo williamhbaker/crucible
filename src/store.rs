@@ -25,7 +25,7 @@ impl Store {
                     .collect::<Result<MemTable, io::Error>>()
                     .map_err(|e| StoreError::WalRecovery(e))?;
 
-                sst.write_records(&memtable)
+                sst.write_records(&memtable) // Should be owned
                     .map_err(|e| StoreError::WalRecovery(e))?;
             }
         };
