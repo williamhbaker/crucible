@@ -8,6 +8,7 @@ use crate::protocol::{ReadRecord, WriteRecord};
 
 pub struct Writer {
     w: BufWriter<fs::File>,
+    size: u32,
 }
 
 impl Writer {
@@ -20,6 +21,7 @@ impl Writer {
                     .create(true)
                     .open(path)?,
             ),
+            size: 0,
         })
     }
 
@@ -28,7 +30,12 @@ impl Writer {
         self.w.flush()?;
         // TODO: Compare to sync_data().
         self.w.get_ref().sync_all()?;
+        self.size += written as u32;
         Ok(written)
+    }
+
+    pub fn size(&self) -> u32 {
+        self.size
     }
 }
 
