@@ -301,9 +301,7 @@ mod tests {
         let dir = TempDir::new("testing").unwrap();
         combine_tables(tables, 1024 * 1024, 1, dir.path()).unwrap();
 
-        let target_dir = dir.path().join(format!("{}", 1));
-
-        let catalog = Catalog::new(&target_dir).unwrap();
+        let catalog = Catalog::new(&dir.path()).unwrap();
 
         let cases = vec![
             (
