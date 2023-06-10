@@ -1,6 +1,6 @@
 use std::{
     io::Read,
-    io::{self, Error, ErrorKind, Write},
+    io::{self, Error, ErrorKind, Seek, SeekFrom, Write},
 };
 
 const EXISTS_OP_BYTE: u8 = b'0';
@@ -114,6 +114,59 @@ impl ReadRecord {
             ReadRecord::Deleted { key } => key,
         }
     }
+}
+
+pub struct Footer {
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+    index_start: u32,
+    footer_length: u32, // Includes the value for footer_length itself, which is 4 bytes
+}
+
+impl Footer {
+    pub fn write_to<T: Write>(&self, w: &mut T) -> io::Result<usize> {
+        let mut written = 0;
+
+        written += w.write(&self.start_key.len().to_le_bytes())?;
+        written += w.write(&self.start_key)?;
+        written += w.write(&self.end_key.len().to_le_bytes())?;
+        written += w.write(&self.end_key)?;
+        written += w.write(&self.index_start.to_le_bytes())?;
+        written += w.write(&(written as u32 + 4).to_le_bytes())?;
+
+        Ok(written)
+    }
+
+    pub fn read_from<T: Read + Seek>(&mut self, r: &mut T) -> io::Result<()> {
+        r.seek(SeekFrom::End(-4))?;
+
+        let mut buf = [0; 4];
+        self.footer_length = read_u32(r, &mut buf)?;
+
+        r.seek(SeekFrom::End(0 - self.footer_length as i64))?;
+
+        let start_key_length = read_u32(r, &mut buf)?;
+        self.start_key = vec![0; start_key_length as usize];
+        r.read_exact(&mut self.start_key)?;
+
+        let end_key_length = read_u32(r, &mut buf)?;
+        self.end_key = vec![0; end_key_length as usize];
+        r.read_exact(&mut self.end_key)?;
+
+        self.index_start = read_u32(r, &mut buf)?;
+
+        todo!()
+    }
+}
+
+fn read_u32<T: Read>(r: &mut T, buf: &mut [u8; 4]) -> io::Result<u32> {
+    r.read_exact(buf)?;
+
+    Ok(u32::from_le_bytes(
+        buf[0..4]
+            .try_into()
+            .expect("must convert slice to byte array"),
+    ))
 }
 
 pub fn fill_buf<R: Read>(
