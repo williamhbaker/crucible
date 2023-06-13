@@ -56,6 +56,8 @@ impl ReadRecord {
         // 1 byte + 4 bytes + 4 bytes
         let mut buf = [0; 9];
 
+        // This should use a magic byte or something to tell if it's at the end, rather than the
+        // weird other thing.
         if fill_buf(reader, &mut buf, 0)?.is_none() {
             return Ok(None);
         }
@@ -116,46 +118,55 @@ impl ReadRecord {
     }
 }
 
+#[derive(Default)]
 pub struct Footer {
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
-    index_start: u32,
-    footer_length: u32, // Includes the value for footer_length itself, which is 4 bytes
+    pub start_key: Vec<u8>,
+    pub end_key: Vec<u8>,
+    pub index_start: u32,
+    // Includes the value for footer_length itself, which is 4 bytes. Will be None will initializing
+    // a footer for a new table, but should always be Some(...) when decoding the footer from a
+    // table.
+    pub footer_length: Option<u32>,
 }
 
 impl Footer {
+    pub fn new_from_reader<T: Read + Seek>(r: &mut T) -> io::Result<Self> {
+        let mut footer = Footer {
+            ..Default::default()
+        };
+
+        r.seek(SeekFrom::End(-4))?;
+
+        let mut buf = [0; 4];
+        let footer_length = read_u32(r, &mut buf)?;
+        footer.footer_length = Some(footer_length);
+
+        r.seek(SeekFrom::End(0 - footer_length as i64))?;
+
+        let start_key_length = read_u32(r, &mut buf)?;
+        footer.start_key = vec![0; start_key_length as usize];
+        r.read_exact(&mut footer.start_key)?;
+
+        let end_key_length = read_u32(r, &mut buf)?;
+        footer.end_key = vec![0; end_key_length as usize];
+        r.read_exact(&mut footer.end_key)?;
+
+        footer.index_start = read_u32(r, &mut buf)?;
+
+        Ok(footer)
+    }
+
     pub fn write_to<T: Write>(&self, w: &mut T) -> io::Result<usize> {
         let mut written = 0;
 
-        written += w.write(&self.start_key.len().to_le_bytes())?;
+        written += w.write(&(self.start_key.len() as u32).to_le_bytes())?;
         written += w.write(&self.start_key)?;
-        written += w.write(&self.end_key.len().to_le_bytes())?;
+        written += w.write(&(self.end_key.len() as u32).to_le_bytes())?;
         written += w.write(&self.end_key)?;
         written += w.write(&self.index_start.to_le_bytes())?;
         written += w.write(&(written as u32 + 4).to_le_bytes())?;
 
         Ok(written)
-    }
-
-    pub fn read_from<T: Read + Seek>(&mut self, r: &mut T) -> io::Result<()> {
-        r.seek(SeekFrom::End(-4))?;
-
-        let mut buf = [0; 4];
-        self.footer_length = read_u32(r, &mut buf)?;
-
-        r.seek(SeekFrom::End(0 - self.footer_length as i64))?;
-
-        let start_key_length = read_u32(r, &mut buf)?;
-        self.start_key = vec![0; start_key_length as usize];
-        r.read_exact(&mut self.start_key)?;
-
-        let end_key_length = read_u32(r, &mut buf)?;
-        self.end_key = vec![0; end_key_length as usize];
-        r.read_exact(&mut self.end_key)?;
-
-        self.index_start = read_u32(r, &mut buf)?;
-
-        todo!()
     }
 }
 

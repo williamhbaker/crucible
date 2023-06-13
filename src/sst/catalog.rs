@@ -5,9 +5,9 @@ use std::{
     path,
 };
 
-use crate::protocol::{ReadRecord, WriteRecord, SST_EXT};
+use crate::protocol::{self, ReadRecord, WriteRecord, SST_EXT};
 
-use super::{table_sequence, Table};
+use super::Table;
 
 pub struct Catalog {
     ssts: Vec<Vec<Table>>, // Index 0 is level 0, 1 is 1, etc.
@@ -126,11 +126,13 @@ impl Catalog {
 
         let mut index_offsets: HashMap<&[u8], u32> = HashMap::new();
 
+        // Write the records. After the records comes the index.
         let index_start = sorted_records.iter().try_fold(0, |written, record| {
             index_offsets.insert(record.key(), written);
             Ok::<u32, io::Error>(written + record.write_to(&mut w)? as u32)
         })?;
 
+        // Write the index.
         for record in &sorted_records {
             let key = record.key();
 
@@ -143,8 +145,22 @@ impl Catalog {
             w.write(key)?;
         }
 
-        // The final byte is the file offset where the index begins.
-        w.write(&index_start.to_le_bytes())?;
+        // Write the footer.
+        let footer = protocol::Footer {
+            start_key: sorted_records
+                .first()
+                .expect("records must not be empty")
+                .key()
+                .to_owned(),
+            end_key: sorted_records
+                .last()
+                .expect("records must not be empty")
+                .key()
+                .to_owned(),
+            index_start,
+            footer_length: None,
+        };
+        footer.write_to(&mut w)?;
 
         w.flush()?;
         file.sync_all()?;
@@ -164,4 +180,8 @@ impl Catalog {
 
         Ok(())
     }
+}
+
+fn table_sequence(path: &path::Path) -> Option<u32> {
+    path.file_stem().unwrap().to_string_lossy().parse().ok()
 }

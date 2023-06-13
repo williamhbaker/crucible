@@ -6,11 +6,10 @@ use std::{
 
 use crate::protocol::ReadRecord;
 
-use super::{table_sequence, Index, IndexReader};
+use super::{Index, IndexReader};
 
 pub struct Table {
     index: Index,
-    pub sequence: Option<u32>,
     file: fs::File,
 }
 
@@ -21,7 +20,6 @@ impl Table {
 
         Ok(Table {
             index: Index::from_index_reader(IndexReader(&mut r))?,
-            sequence: table_sequence(&path),
             file,
         })
     }
