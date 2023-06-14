@@ -51,18 +51,17 @@ pub fn combine_tables<T: Iterator<Item = ReadRecord>>(
         // Tuple of (key, offset)
         let mut index_offsets: Vec<(Vec<u8>, u32)> = Vec::new();
 
-        // TODO: These will need to be added to some kind of meta-index.
-        let mut _key_start = vec![];
-        let mut _key_end = vec![];
+        let mut start_key = vec![];
+        let mut end_key = vec![];
         if let Some(record) = merge.peek() {
-            _key_start = record.key().to_vec();
+            start_key = record.key().to_vec();
         }
 
         while written < size_limit {
             if let Some(record) = merge.next() {
                 index_offsets.push((record.key().to_vec(), written));
                 written += record.write_to(&mut w)? as u32;
-                _key_end = record.key().to_vec();
+                end_key = record.key().to_vec();
             } else {
                 break;
             }
@@ -75,8 +74,14 @@ pub fn combine_tables<T: Iterator<Item = ReadRecord>>(
             w.write(&key)?;
         }
 
-        // The final byte is the file offset where the index begins.
-        w.write(&written.to_le_bytes())?;
+        // Write the footer.
+        let footer = protocol::Footer {
+            start_key,
+            end_key,
+            index_start: written,
+            footer_length: None,
+        };
+        footer.write_to(&mut w)?;
 
         w.flush()?;
         file.sync_all()?;
