@@ -12,14 +12,16 @@ use crate::protocol::{self, ReadRecord};
 
 pub struct CombineTable<T>
 where
-    T: Iterator<Item = ReadRecord>,
+    T: Iterator<Item = io::Result<ReadRecord>>,
 {
     table: T,
     level: u32,
     sequence: Option<u32>,
 }
 
-pub fn combine_tables<T: Iterator<Item = ReadRecord>>(
+// TODO: A lot of this is redundant with Catalog::write_records. It would be nice to consolidate
+// these two.
+pub fn combine_tables<T: Iterator<Item = io::Result<ReadRecord>>>(
     tables: Vec<CombineTable<T>>,
     size_limit: u32, // Excluding index
     output_level: u32,
@@ -27,8 +29,8 @@ pub fn combine_tables<T: Iterator<Item = ReadRecord>>(
 ) -> io::Result<()> {
     let mut merge = MergeIter::new();
 
-    for table in tables.into_iter() {
-        merge.push_iter(table.table, table.level, table.sequence)
+    for table in tables {
+        merge.push_iter(table.table, table.level, table.sequence)?;
     }
 
     let mut merge = merge.peekable();
@@ -54,11 +56,17 @@ pub fn combine_tables<T: Iterator<Item = ReadRecord>>(
         let mut start_key = vec![];
         let mut end_key = vec![];
         if let Some(record) = merge.peek() {
-            start_key = record.key().to_vec();
+            match record {
+                Ok(r) => start_key = r.key().to_vec(),
+                Err(_) => {
+                    merge.next().expect("next must exist when peeked")?;
+                }
+            }
         }
 
         while written < size_limit {
             if let Some(record) = merge.next() {
+                let record = record?;
                 index_offsets.push((record.key().to_vec(), written));
                 written += record.write_to(&mut w)? as u32;
                 end_key = record.key().to_vec();
@@ -94,7 +102,7 @@ pub fn combine_tables<T: Iterator<Item = ReadRecord>>(
 
 struct IterBuf<T>
 where
-    T: Iterator<Item = ReadRecord>,
+    T: Iterator<Item = io::Result<ReadRecord>>,
 {
     iter: T,
     buf: Option<ReadRecord>,
@@ -104,7 +112,7 @@ where
 
 impl<T> Ord for IterBuf<T>
 where
-    T: Iterator<Item = ReadRecord>,
+    T: Iterator<Item = io::Result<ReadRecord>>,
 {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match (&self.buf, &other.buf) {
@@ -135,18 +143,18 @@ where
 
 impl<T> PartialOrd for IterBuf<T>
 where
-    T: Iterator<Item = ReadRecord>,
+    T: Iterator<Item = io::Result<ReadRecord>>,
 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T> Eq for IterBuf<T> where T: Iterator<Item = ReadRecord> {}
+impl<T> Eq for IterBuf<T> where T: Iterator<Item = io::Result<ReadRecord>> {}
 
 impl<T> PartialEq for IterBuf<T>
 where
-    T: Iterator<Item = ReadRecord>,
+    T: Iterator<Item = io::Result<ReadRecord>>,
 {
     fn eq(&self, other: &Self) -> bool {
         match (&self.buf, &other.buf) {
@@ -160,14 +168,14 @@ where
 
 struct MergeIter<T>
 where
-    T: Iterator<Item = ReadRecord>,
+    T: Iterator<Item = io::Result<ReadRecord>>,
 {
     iters: BinaryHeap<IterBuf<T>>,
 }
 
 impl<T> MergeIter<T>
 where
-    T: Iterator<Item = ReadRecord>,
+    T: Iterator<Item = io::Result<ReadRecord>>,
 {
     pub fn new() -> Self {
         return MergeIter {
@@ -175,22 +183,22 @@ where
         };
     }
 
-    pub fn push_iter(&mut self, mut iter: T, level: u32, sequence: Option<u32>) {
-        let buf = iter.next();
-        self.iters.push(IterBuf {
+    pub fn push_iter(&mut self, mut iter: T, level: u32, sequence: Option<u32>) -> io::Result<()> {
+        let buf = iter.next().transpose()?;
+        Ok(self.iters.push(IterBuf {
             iter,
             buf,
             level,
             sequence,
-        })
+        }))
     }
 }
 
 impl<T> Iterator for MergeIter<T>
 where
-    T: Iterator<Item = ReadRecord>,
+    T: Iterator<Item = io::Result<ReadRecord>>,
 {
-    type Item = ReadRecord;
+    type Item = io::Result<ReadRecord>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Get the highest priority iterator.
@@ -203,12 +211,17 @@ where
             let next_record = nn.buf.as_ref().expect("Buffer must not be None");
             if record.key() == next_record.key() {
                 // Pop and re-fill the buffer of the next iterator.
-                self.iters.pop().map(|mut popped| {
+                if let Some(mut popped) = self.iters.pop() {
                     if let Some(buf) = popped.iter.next() {
+                        let buf = match buf {
+                            Ok(b) => b,
+                            Err(e) => return Some(Err(e)),
+                        };
+
                         popped.buf = Some(buf);
                         self.iters.push(popped);
                     }
-                });
+                };
             } else {
                 break;
             }
@@ -217,11 +230,16 @@ where
         // Put this iterator back in, first re-filling its buffer, as long as the iterator isn't
         // empty.
         if let Some(new_buf) = n.iter.next() {
+            let new_buf = match new_buf {
+                Ok(b) => b,
+                Err(e) => return Some(Err(e)),
+            };
+
             n.buf = Some(new_buf);
             self.iters.push(n)
         }
 
-        Some(record)
+        Some(Ok(record))
     }
 }
 
@@ -244,7 +262,11 @@ mod tests {
                 key: b"key2".to_vec(),
                 val: b"val2_1".to_vec(),
             },
-        ];
+        ]
+        .into_iter()
+        .map(|item| Ok(item))
+        .collect::<Vec<io::Result<ReadRecord>>>()
+        .into_iter();
 
         let records_2 = vec![
             ReadRecord::Exists {
@@ -262,7 +284,11 @@ mod tests {
             ReadRecord::Deleted {
                 key: b"key6".to_vec(),
             },
-        ];
+        ]
+        .into_iter()
+        .map(|item| Ok(item))
+        .collect::<Vec<io::Result<ReadRecord>>>()
+        .into_iter();
 
         let records_3 = vec![
             ReadRecord::Exists {
@@ -273,31 +299,39 @@ mod tests {
                 key: b"key5".to_vec(),
                 val: b"val5_3".to_vec(),
             },
-        ];
+        ]
+        .into_iter()
+        .map(|item| Ok(item))
+        .collect::<Vec<io::Result<ReadRecord>>>()
+        .into_iter();
 
         let records_4 = vec![ReadRecord::Exists {
             key: b"key6".to_vec(),
             val: b"val6_4".to_vec(),
-        }];
+        }]
+        .into_iter()
+        .map(|item| Ok(item))
+        .collect::<Vec<io::Result<ReadRecord>>>()
+        .into_iter();
 
         let tables = vec![
             CombineTable {
-                table: records_1.into_iter(),
+                table: records_1,
                 level: 0,
                 sequence: Some(0),
             },
             CombineTable {
-                table: records_2.into_iter(),
+                table: records_2,
                 level: 0,
                 sequence: Some(1),
             },
             CombineTable {
-                table: records_3.into_iter(),
+                table: records_3,
                 level: 1,
                 sequence: None,
             },
             CombineTable {
-                table: records_4.into_iter(),
+                table: records_4,
                 level: 2,
                 sequence: None,
             },
