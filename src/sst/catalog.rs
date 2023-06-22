@@ -10,7 +10,7 @@ use crate::protocol::{self, ReadRecord, WriteRecord, SST_EXT};
 use super::Table;
 
 pub struct Catalog {
-    ssts: Vec<Vec<Table>>, // Index 0 is level 0, 1 is 1, etc.
+    pub ssts: Vec<Vec<Table>>, // Index 0 is level 0, 1 is 1, etc.
     watermark: u32,
     data_dir: path::PathBuf,
 }
@@ -52,14 +52,17 @@ impl Catalog {
                 .filter(|file| file.path().is_file())
                 .collect::<Vec<fs::DirEntry>>();
 
-            files.sort_unstable_by_key(|file| {
-                file.path()
-                    .file_stem()
-                    .unwrap()
-                    .to_string_lossy()
-                    .parse::<usize>()
-                    .unwrap()
-            });
+            // Sort files in level 0 in ascending order.
+            if level == 0 {
+                files.sort_unstable_by_key(|file| {
+                    file.path()
+                        .file_stem()
+                        .unwrap()
+                        .to_string_lossy()
+                        .parse::<usize>()
+                        .unwrap()
+                });
+            }
 
             files.into_iter().for_each(|file| {
                 let path = file.path();

@@ -7,8 +7,8 @@ use crate::protocol::Footer;
 
 pub struct Index {
     map: HashMap<Vec<u8>, u32>, // Keys (as byte slices) to file offsets
-    key_start: Vec<u8>,
-    key_end: Vec<u8>,
+    pub key_start: Vec<u8>,
+    pub key_end: Vec<u8>,
 }
 
 impl Index {
@@ -19,7 +19,7 @@ impl Index {
     pub fn from_index_reader<T: Read + Seek>(r: IndexReader<T>) -> io::Result<Index> {
         let mut map = HashMap::new();
 
-        // Requirement: IndexReader iterators through keys in ascending sorted order.
+        // Requirement: IndexReader iterates through keys in ascending sorted order.
         let mut key_start = None;
         let mut key_end = None;
 

@@ -14,16 +14,16 @@ pub struct CombineTable<T>
 where
     T: Iterator<Item = io::Result<ReadRecord>>,
 {
-    table: T,
-    level: u32,
-    sequence: Option<u32>,
+    pub table: T,
+    pub level: usize,
+    pub sequence: Option<u32>,
 }
 
 // TODO: A lot of this is redundant with Catalog::write_records. It would be nice to consolidate
 // these two.
 pub fn combine_tables<T: Iterator<Item = io::Result<ReadRecord>>>(
     tables: Vec<CombineTable<T>>,
-    size_limit: u32, // Excluding index
+    size_limit: usize, // Excluding index
     output_level: u32,
     output_dir: &path::Path,
 ) -> io::Result<()> {
@@ -39,7 +39,7 @@ pub fn combine_tables<T: Iterator<Item = io::Result<ReadRecord>>>(
         let fname = Uuid::new_v4();
         let path = output_dir.join(format!("{}", output_level));
         // Create the directory if it doesn't yet exist.
-        fs::create_dir(&path)?;
+        fs::create_dir_all(&path)?;
         let mut path = path.join(fname.to_string());
         path.set_extension(protocol::SST_EXT);
 
@@ -51,7 +51,7 @@ pub fn combine_tables<T: Iterator<Item = io::Result<ReadRecord>>>(
         let mut w = BufWriter::new(&file);
         let mut written = 0;
         // Tuple of (key, offset)
-        let mut index_offsets: Vec<(Vec<u8>, u32)> = Vec::new();
+        let mut index_offsets: Vec<(Vec<u8>, usize)> = Vec::new();
 
         let mut start_key = vec![];
         let mut end_key = vec![];
@@ -68,16 +68,16 @@ pub fn combine_tables<T: Iterator<Item = io::Result<ReadRecord>>>(
             if let Some(record) = merge.next() {
                 let record = record?;
                 index_offsets.push((record.key().to_vec(), written));
-                written += record.write_to(&mut w)? as u32;
+                written += record.write_to(&mut w)?;
                 end_key = record.key().to_vec();
             } else {
                 break;
             }
         }
 
-        // Hit the size limit, so now write out the index and finish the file.
+        // Hit the size limit or ran out of records, so now write out the index and finish the file.
         for (key, offset) in index_offsets.into_iter() {
-            w.write(&offset.to_le_bytes())?;
+            w.write(&(offset as u32).to_le_bytes())?;
             w.write(&(key.len() as u32).to_le_bytes())?;
             w.write(&key)?;
         }
@@ -86,7 +86,7 @@ pub fn combine_tables<T: Iterator<Item = io::Result<ReadRecord>>>(
         let footer = protocol::Footer {
             start_key,
             end_key,
-            index_start: written,
+            index_start: written as u32,
             footer_length: None,
         };
         footer.write_to(&mut w)?;
@@ -106,7 +106,7 @@ where
 {
     iter: T,
     buf: Option<ReadRecord>,
-    level: u32,
+    level: usize,
     sequence: Option<u32>,
 }
 
@@ -183,7 +183,12 @@ where
         };
     }
 
-    pub fn push_iter(&mut self, mut iter: T, level: u32, sequence: Option<u32>) -> io::Result<()> {
+    pub fn push_iter(
+        &mut self,
+        mut iter: T,
+        level: usize,
+        sequence: Option<u32>,
+    ) -> io::Result<()> {
         let buf = iter.next().transpose()?;
         Ok(self.iters.push(IterBuf {
             iter,

@@ -1,6 +1,6 @@
 use std::{
     io::Read,
-    io::{self, Error, ErrorKind, Seek, SeekFrom, Write},
+    io::{self, Seek, SeekFrom, Write},
 };
 
 const EXISTS_OP_BYTE: u8 = b'0';
@@ -51,16 +51,11 @@ pub enum ReadRecord {
 }
 
 impl ReadRecord {
-    pub fn read_from<R: Read>(reader: &mut R) -> io::Result<Option<Self>> {
+    pub fn read_from<R: Read>(reader: &mut R) -> io::Result<Self> {
         // Big enough for operation, key length, and val length
         // 1 byte + 4 bytes + 4 bytes
         let mut buf = [0; 9];
-
-        // This should use a magic byte or something to tell if it's at the end, rather than the
-        // weird other thing.
-        if fill_buf(reader, &mut buf, 0)?.is_none() {
-            return Ok(None);
-        }
+        reader.read_exact(&mut buf)?;
 
         let key_length = u32::from_le_bytes(
             buf[1..5]
@@ -80,9 +75,9 @@ impl ReadRecord {
                 let mut val = vec![0; val_length as usize];
                 reader.read_exact(&mut val)?;
 
-                Ok(Some(ReadRecord::Exists { key: key, val: val }))
+                Ok(ReadRecord::Exists { key: key, val: val })
             }
-            DELETED_OP_BYTE => Ok(Some(ReadRecord::Deleted { key: key })),
+            DELETED_OP_BYTE => Ok(ReadRecord::Deleted { key: key }),
             b => panic!("invalid op byte {}", b),
         }
     }
@@ -114,6 +109,14 @@ impl ReadRecord {
         match self {
             ReadRecord::Exists { key, .. } => key,
             ReadRecord::Deleted { key } => key,
+        }
+    }
+
+    // Size as read from disk, including the 9 byte record header, in bytes.
+    pub fn size(&self) -> usize {
+        9 + match self {
+            ReadRecord::Exists { key, val } => key.len() + val.len(),
+            ReadRecord::Deleted { key } => key.len(),
         }
     }
 }
@@ -178,44 +181,4 @@ fn read_u32<T: Read>(r: &mut T, buf: &mut [u8; 4]) -> io::Result<u32> {
             .try_into()
             .expect("must convert slice to byte array"),
     ))
-}
-
-pub fn fill_buf<R: Read>(
-    reader: &mut R,
-    buf: &mut [u8],
-    trailer: usize,
-) -> io::Result<Option<usize>> {
-    let mut read = 0;
-    let mut start = 0;
-    let end = buf.len();
-
-    loop {
-        match reader.read(&mut buf[start..end]) {
-            Ok(0) => {
-                // EOF. If we've only read the trailer, it means we got here cleanly. Otherwise, we
-                // couldn't read as much as we thought and should error.
-                return if read == trailer {
-                    Ok(None)
-                } else {
-                    Err(Error::from(ErrorKind::UnexpectedEof))
-                };
-            }
-            Ok(n) if n == (end - start) => {
-                // Filled the buffer, maybe not on the first pass.
-                read += n;
-                return Ok(Some(read));
-            }
-            Ok(n) => {
-                // Read some bytes but not enough, so try again.
-                read += n;
-                start += n;
-            }
-            Err(e) => {
-                match e.kind() {
-                    ErrorKind::Interrupted => (), // Ignore & keep going
-                    _ => return Err(e),
-                }
-            }
-        };
-    }
 }

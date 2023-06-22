@@ -1,20 +1,31 @@
 use std::{fs, io, path};
 
-use crate::{memtable::MemTable, protocol::WriteRecord, sst::Catalog, wal, StoreError};
+use crate::{
+    compactor::compactor, memtable::MemTable, protocol::WriteRecord, sst::Catalog, wal, StoreError,
+};
 
 const WAL_FILE_NAME: &'static str = "data.wal";
 const WAL_SIZE_LIMIT: u32 = 4 * 1024 * 1024;
+const TABLE_SIZE_LIMIT: usize = 4 * 1024 * 1024;
+const LEVEL_0_FILE_LIMIT: usize = 5;
 
 pub struct Store {
     memtable: MemTable,
     wal: wal::Writer,
-    catalog: Catalog,
+    catalog: Option<Catalog>,
     wal_size_limit: u32, // bytes
     wal_file_path: path::PathBuf,
+    data_dir: path::PathBuf,
+    compactor: compactor::Compactor,
 }
 
 impl Store {
-    pub fn new(data_dir: &path::Path, wal_size_limit: Option<u32>) -> Result<Store, StoreError> {
+    pub fn new(
+        data_dir: &path::Path,
+        wal_size_limit: Option<u32>,
+        table_size_limit: Option<usize>,
+        level_0_file_limit: Option<usize>,
+    ) -> Result<Store, StoreError> {
         let wal_file_path = data_dir.join(&WAL_FILE_NAME);
 
         let mut sst = Catalog::new(&data_dir).map_err(|e| StoreError::CatalogInitialization(e))?;
@@ -36,9 +47,15 @@ impl Store {
         Ok(Store {
             memtable: MemTable::new(),
             wal: wal::Writer::new(&wal_file_path).map_err(|e| StoreError::WalInitialization(e))?,
-            catalog: sst,
+            catalog: Some(sst),
             wal_size_limit: wal_size_limit.unwrap_or(WAL_SIZE_LIMIT),
             wal_file_path,
+            data_dir: data_dir.into(),
+            compactor: compactor::Compactor::new(
+                level_0_file_limit.unwrap_or(LEVEL_0_FILE_LIMIT),
+                table_size_limit.unwrap_or(TABLE_SIZE_LIMIT),
+                data_dir,
+            ),
         })
     }
 
@@ -53,7 +70,7 @@ impl Store {
     pub fn get(&self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
         if let Some(val) = self.memtable.get(key) {
             Ok(Some(val.to_vec()))
-        } else if let Some(rec) = self.catalog.get(key)? {
+        } else if let Some(rec) = self.catalog.as_ref().unwrap().get(key)? {
             match rec {
                 crate::protocol::ReadRecord::Exists { val, .. } => Ok(Some(val)),
                 crate::protocol::ReadRecord::Deleted { .. } => Ok(None),
@@ -86,9 +103,18 @@ impl Store {
 
     // TODO: Ideally this would be async.
     pub fn flush_memtable(&mut self) -> io::Result<()> {
-        self.catalog.write_records(&self.memtable)?;
+        self.catalog
+            .as_mut()
+            .unwrap()
+            .write_records(&self.memtable)?;
         self.wal = wal::Writer::new(&self.wal_file_path)?;
         self.memtable = MemTable::new();
+        self.compactor
+            .maybe_compact(self.catalog.take().unwrap().ssts)?;
+
+        // TODO: Re-reading the entire SST catalog from disk every flush is going to be very
+        // inefficient. This is a temporary placeholder.
+        self.catalog = Some(Catalog::new(&self.data_dir)?);
 
         Ok(())
     }

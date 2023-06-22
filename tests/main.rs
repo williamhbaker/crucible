@@ -10,7 +10,7 @@ use tempdir::TempDir;
 #[test]
 fn test_store() {
     let dir = TempDir::new("testing").unwrap();
-    let mut store = Store::new(dir.path(), None).unwrap();
+    let mut store = Store::new(dir.path(), None, None, None).unwrap();
 
     let records = vec![
         ReadRecord::Exists {
@@ -53,7 +53,7 @@ fn test_store() {
 
     // Re-open and the results are the same.
     drop(store);
-    let mut store = Store::new(dir.path(), None).unwrap();
+    let mut store = Store::new(dir.path(), None, None, None).unwrap();
     assert_eq!(None, store.get(b"key1".to_vec().as_ref()).unwrap());
     assert_eq!(
         Some(b"val2updated".to_vec()),
@@ -67,7 +67,7 @@ fn test_store() {
     // Delete from the store then re-open it.
     store.del(b"key2".as_ref()).unwrap();
     drop(store);
-    let mut store = Store::new(dir.path(), None).unwrap();
+    let mut store = Store::new(dir.path(), None, None, None).unwrap();
     assert_eq!(None, store.get(b"key1".to_vec().as_ref()).unwrap());
     assert_eq!(None, store.get(b"key2".to_vec().as_ref()).unwrap());
     assert_eq!(
@@ -78,7 +78,7 @@ fn test_store() {
     // Update a value in the store then re-open it. This will create a second SST.
     store.put(b"key3".as_ref(), b"val3updated").unwrap();
     drop(store);
-    let store = Store::new(dir.path(), None).unwrap();
+    let store = Store::new(dir.path(), None, None, None).unwrap();
     assert_eq!(None, store.get(b"key1".to_vec().as_ref()).unwrap());
     assert_eq!(None, store.get(b"key2".to_vec().as_ref()).unwrap());
     assert_eq!(
@@ -99,6 +99,8 @@ fn stress_test() {
     // This will produce at least 200 memtable flushes, depending on how many times a restart is
     // triggered.
     let wal_size = 100 * 1024;
+    let table_size_limit = 100 * 1024;
+    let level_0_file_limit = 5;
 
     // Total number of "actions", which are inserts, deletes, updates, or even restarts.
     let action_limit = 10_000;
@@ -117,7 +119,13 @@ fn stress_test() {
     let val_length = 1..4096;
 
     let dir = TempDir::new("testing").unwrap();
-    let mut store = Store::new(dir.path(), Some(wal_size)).unwrap();
+    let mut store = Store::new(
+        dir.path(),
+        Some(wal_size),
+        Some(table_size_limit as usize),
+        Some(level_0_file_limit),
+    )
+    .unwrap();
     let mut ref_store: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
     let mut pool: VecDeque<Vec<u8>> = VecDeque::with_capacity(update_pool_size);
 
@@ -133,7 +141,13 @@ fn stress_test() {
         if rand % restart_probability == 0 {
             // Close an re-open the store, which will convert any left-over wal file into an sst.
             drop(store);
-            store = Store::new(dir.path(), Some(wal_size)).unwrap();
+            store = Store::new(
+                dir.path(),
+                Some(wal_size),
+                Some(table_size_limit as usize),
+                Some(level_0_file_limit),
+            )
+            .unwrap();
             continue;
         }
 
@@ -217,7 +231,13 @@ fn stress_test() {
 
     // Double check after re-opening the store.
     drop(store);
-    store = Store::new(dir.path(), Some(wal_size)).unwrap();
+    store = Store::new(
+        dir.path(),
+        Some(wal_size),
+        Some(table_size_limit as usize),
+        Some(level_0_file_limit),
+    )
+    .unwrap();
 
     for (ref_key, ref_val) in ref_store.iter() {
         let ref_got = store.get(ref_key).unwrap().unwrap();
